@@ -224,7 +224,7 @@
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\concurrent\\futures\\thread.py',
    'PYMODULE'),
   ('config',
-   'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\files\\config.py',
+   'C:\\workarea\\workspace\\TreeSolutionAPI\\src\\treesolution_tool\\files\\config.py',
    'PYMODULE'),
   ('contextlib',
    'C:\\Program '
@@ -413,17 +413,17 @@
    'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\Lib\\site-packages\\et_xmlfile\\xmlfile.py',
    'PYMODULE'),
   ('exporter',
-   'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\files\\exporter.py',
+   'C:\\workarea\\workspace\\TreeSolutionAPI\\src\\treesolution_tool\\files\\exporter.py',
    'PYMODULE'),
   ('fileinput',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\fileinput.py',
    'PYMODULE'),
   ('filters_employee_list',
-   'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\files\\filters_employee_list.py',
+   'C:\\workarea\\workspace\\TreeSolutionAPI\\src\\treesolution_tool\\files\\filters_employee_list.py',
    'PYMODULE'),
   ('filters_technical',
-   'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\files\\filters_technical.py',
+   'C:\\workarea\\workspace\\TreeSolutionAPI\\src\\treesolution_tool\\files\\filters_technical.py',
    'PYMODULE'),
   ('fnmatch',
    'C:\\Program '
@@ -582,7 +582,7 @@
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\inspect.py',
    'PYMODULE'),
   ('io_utils',
-   'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\files\\io_utils.py',
+   'C:\\workarea\\workspace\\TreeSolutionAPI\\src\\treesolution_tool\\files\\io_utils.py',
    'PYMODULE'),
   ('ipaddress',
    'C:\\Program '
@@ -613,7 +613,7 @@
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\lzma.py',
    'PYMODULE'),
   ('menu',
-   'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\files\\menu.py',
+   'C:\\workarea\\workspace\\TreeSolutionAPI\\src\\treesolution_tool\\files\\menu.py',
    'PYMODULE'),
   ('mimetypes',
    'C:\\Program '
@@ -2779,7 +2779,7 @@
    'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\Lib\\site-packages\\tzdata\\zoneinfo\\US\\__init__.py',
    'PYMODULE'),
   ('ui_app',
-   'C:\\workarea\\workspace\\TreeSolutionAPI\\.venv\\files\\ui_app.py',
+   'C:\\workarea\\workspace\\TreeSolutionAPI\\src\\treesolution_tool\\files\\ui_app.py',
    'PYMODULE'),
   ('unittest',
    'C:\\Program '

@@ -296,9 +296,10 @@ class TreeSolutionUI:
         win.focus_set()
 
     def _ask_export_save_path(self, initialfile: str | None = None) -> str:
+        suggested_name = (initialfile or "").strip() or "Upload.csv"
         save_path = filedialog.asksaveasfilename(
             title="Export CSV speichern unter",
-            initialfile=initialfile or (Path(self.state.output_file).name if self.state.output_file else "Upload.csv"),
+            initialfile=suggested_name,
             defaultextension=".csv",
             filetypes=[("CSV", "*.csv"), ("Alle Dateien", "*.*")],
         )
@@ -321,8 +322,8 @@ class TreeSolutionUI:
         else:
             self._log(f"Export geschrieben: {self.state.output_file} | Zeilen: {rows}")
 
-    def _export_regular_from_df(self, df_source: pd.DataFrame) -> None:
-        save_path = self._ask_export_save_path()
+    def _export_regular_from_df(self, df_source: pd.DataFrame, initialfile: str = "Upload.csv") -> None:
+        save_path = self._ask_export_save_path(initialfile=initialfile)
         if not save_path:
             self._log("Export abgebrochen.")
             return
@@ -602,6 +603,7 @@ class TreeSolutionUI:
         view_state = {"df": df.copy()}
         previous_output_csv = self.output_file_var.get().strip()
         self.output_file_var.set("Upload.csv")
+        self.state.output_file = "Upload.csv"
 
         win = tk.Toplevel(self.root)
         win.title(f"Aktuelle Auswahl ({len(df)} Zeilen)")
@@ -621,7 +623,7 @@ class TreeSolutionUI:
             "Output CSV",
             self.output_file_var,
             row=0,
-            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["df"])),
+            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["df"], initialfile="Upload.csv")),
         )
         self._build_entry_row(
             export_controls,
@@ -633,7 +635,7 @@ class TreeSolutionUI:
         tk.Button(
             export_controls,
             text="Exportieren",
-            command=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["df"])),
+            command=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["df"], initialfile="Upload.csv")),
             width=28,
         ).grid(row=0, column=3, padx=4, pady=4, sticky="w")
 
@@ -737,6 +739,7 @@ class TreeSolutionUI:
         batch_size_var = tk.StringVar(value=str(len(df_snapshot)))
         previous_output_csv = self.output_file_var.get().strip()
         self.output_file_var.set("Batch-Upload.csv")
+        self.state.output_file = "Batch-Upload.csv"
 
         win = tk.Toplevel(self.root)
         win.title(f"Batch-Export ({len(df_snapshot)} Zeilen in aktueller Auswahl)")
@@ -823,6 +826,8 @@ class TreeSolutionUI:
 
         def run_batch_export() -> None:
             self.batch_export_count_var.set(batch_size_var.get())
+            self.output_file_var.set("Batch-Upload.csv")
+            self.state.output_file = "Batch-Upload.csv"
             self._with_errors(lambda: self._export_next_batch_from_df(df_snapshot))
             refresh_view()
 

@@ -2,10 +2,14 @@
 
 
 a = Analysis(
-    ['.venv\\files\\main.py'],
-    pathex=[],
+    ['src\\treesolution_tool\\files\\main.py'],
+    pathex=['src\\treesolution_tool\\files'],
     binaries=[],
-    datas=[('.venv\\files\\keywords_technische_accounts.txt', '.'), ('.venv\\files\\batch_export_tracker.json', '.'), ('.venv\\files\\ui_state.json', '.')],
+    datas=[
+        ('src\\treesolution_tool\\files\\keywords_technische_accounts.txt', '.'),
+        ('src\\treesolution_tool\\files\\batch_export_tracker.json', '.'),
+        ('src\\treesolution_tool\\files\\ui_state.json', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
