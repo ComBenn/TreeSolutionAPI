@@ -3,5 +3,17 @@
   "users_sheet": "Sheet1",
   "keywords_file": "keywords_technische_accounts.txt",
   "output_file": "Batch-Upload.csv",
-  "export_department_override": ""
+  "export_department_override": "",
+  "employee_list_file": "C:/Users/kaise/Downloads/IT_Mitarbeiterliste.xlsx",
+  "employee_list_sheet": "",
+  "employee_template_name": "IT_Mitarbeiterliste",
+  "employee_list_templates": [
+    {
+      "name": "IT_Mitarbeiterliste",
+      "file": "C:/Users/kaise/Downloads/IT_Mitarbeiterliste.xlsx",
+      "sheet": "",
+      "mode": "exclude",
+      "active": true
+    }
+  ]
 }

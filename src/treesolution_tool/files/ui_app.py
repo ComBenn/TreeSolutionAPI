@@ -112,9 +112,12 @@ class TreeSolutionUI:
         self.output_file_var = tk.StringVar(value=self.state.output_file)
         self.export_department_override_var = tk.StringVar(value="")
         self.batch_export_count_var = tk.StringVar(value="250")
+        self.employee_template_name_var = tk.StringVar(value="")
         self.employee_list_file_var = tk.StringVar(value="")
         self.employee_list_sheet_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Bereit.")
+        self.employee_list_templates: list[dict] = []
+        self.employee_templates_tree: ttk.Treeview | None = None
 
         self._build_ui()
         self._refresh_status()
@@ -144,10 +147,58 @@ class TreeSolutionUI:
         employee = tk.LabelFrame(self.root, text="Mitarbeiterliste", padx=10, pady=10)
         employee.pack(fill="x", padx=10, pady=(0, 10))
 
-        self._build_file_row(employee, "Liste", self.employee_list_file_var, self._pick_employee_list_file, row=0, on_enter=self.mark_employee_list)
-        self._build_entry_row(employee, "Liste Sheet", self.employee_list_sheet_var, row=1, on_enter=self.mark_employee_list)
+        self._build_entry_row(employee, "Vorlagenname", self.employee_template_name_var, row=0)
+        self._build_file_row(employee, "Liste", self.employee_list_file_var, self._pick_employee_list_file, row=1)
+        self._build_entry_row(employee, "Liste Sheet", self.employee_list_sheet_var, row=2)
 
-        tk.Button(employee, text="Nach Liste filtern", command=self.mark_employee_list, width=28).grid(row=0, column=3, padx=4, pady=4, sticky="w")
+        tk.Button(employee, text="Vorlage speichern/aktualisieren", command=self.save_employee_template, width=32).grid(
+            row=0, column=3, padx=4, pady=4, sticky="w"
+        )
+        tk.Button(employee, text="Vorlage entfernen", command=self.remove_employee_template, width=32).grid(
+            row=1, column=3, padx=4, pady=4, sticky="w"
+        )
+        tk.Button(employee, text="Modus umschalten (ein/aus)", command=self.toggle_selected_template_mode, width=32).grid(
+            row=2, column=3, padx=4, pady=4, sticky="w"
+        )
+        tk.Button(employee, text="Aktiv umschalten", command=self.toggle_selected_template_active, width=32).grid(
+            row=0, column=4, padx=4, pady=4, sticky="w"
+        )
+        tk.Button(employee, text="Nur ausgewählte Vorlage laden", command=self.load_selected_employee_template, width=32).grid(
+            row=1, column=4, padx=4, pady=4, sticky="w"
+        )
+        tk.Button(employee, text="Aktive Vorlagen anwenden", command=self.mark_employee_list, width=32).grid(
+            row=2, column=4, padx=4, pady=4, sticky="w"
+        )
+
+        template_table = tk.Frame(employee)
+        template_table.grid(row=3, column=0, columnspan=6, sticky="nsew", padx=4, pady=(8, 0))
+        employee.grid_columnconfigure(1, weight=1)
+        employee.grid_rowconfigure(3, weight=1)
+
+        self.employee_templates_tree = ttk.Treeview(
+            template_table,
+            columns=("name", "mode", "active", "file", "sheet"),
+            show="headings",
+            height=5,
+            selectmode="browse",
+        )
+        self.employee_templates_tree.heading("name", text="Vorlage")
+        self.employee_templates_tree.heading("mode", text="Modus")
+        self.employee_templates_tree.heading("active", text="Aktiv")
+        self.employee_templates_tree.heading("file", text="Datei")
+        self.employee_templates_tree.heading("sheet", text="Sheet")
+        self.employee_templates_tree.column("name", width=180, minwidth=120, stretch=False)
+        self.employee_templates_tree.column("mode", width=120, minwidth=100, stretch=False)
+        self.employee_templates_tree.column("active", width=70, minwidth=60, stretch=False)
+        self.employee_templates_tree.column("file", width=420, minwidth=220, stretch=True)
+        self.employee_templates_tree.column("sheet", width=120, minwidth=80, stretch=False)
+        emp_vsb = ttk.Scrollbar(template_table, orient="vertical", command=self.employee_templates_tree.yview)
+        self.employee_templates_tree.configure(yscrollcommand=emp_vsb.set)
+        self.employee_templates_tree.grid(row=0, column=0, sticky="nsew")
+        emp_vsb.grid(row=0, column=1, sticky="ns")
+        template_table.grid_rowconfigure(0, weight=1)
+        template_table.grid_columnconfigure(0, weight=1)
+        self.employee_templates_tree.bind("<<TreeviewSelect>>", lambda _e: self._load_selected_template_into_fields())
 
         export_box = tk.LabelFrame(self.root, text="Export", padx=10, pady=10)
         export_box.pack(fill="x", padx=10, pady=(0, 10))
@@ -232,6 +283,10 @@ class TreeSolutionUI:
         keywords_file = str(payload.get("keywords_file", "")).strip()
         output_file = str(payload.get("output_file", "")).strip()
         export_department = str(payload.get("export_department_override", "")).strip()
+        employee_list_file = str(payload.get("employee_list_file", "")).strip()
+        employee_list_sheet = str(payload.get("employee_list_sheet", "")).strip()
+        employee_template_name = str(payload.get("employee_template_name", "")).strip()
+        templates_raw = payload.get("employee_list_templates", [])
 
         if users_file:
             self.users_file_var.set(users_file)
@@ -241,7 +296,15 @@ class TreeSolutionUI:
             self.keywords_file_var.set(keywords_file)
         if output_file:
             self.output_file_var.set(output_file)
+        if employee_list_file:
+            self.employee_list_file_var.set(employee_list_file)
+        if employee_list_sheet:
+            self.employee_list_sheet_var.set(employee_list_sheet)
+        if employee_template_name:
+            self.employee_template_name_var.set(employee_template_name)
         self.export_department_override_var.set(export_department)
+        self.employee_list_templates = self._sanitize_employee_templates(templates_raw)
+        self._refresh_employee_templates_view()
         self._sync_state_paths()
 
     def _save_ui_state(self) -> None:
@@ -252,6 +315,10 @@ class TreeSolutionUI:
             "keywords_file": self.keywords_file_var.get().strip(),
             "output_file": self.output_file_var.get().strip(),
             "export_department_override": self.export_department_override_var.get().strip(),
+            "employee_list_file": self.employee_list_file_var.get().strip(),
+            "employee_list_sheet": self.employee_list_sheet_var.get().strip(),
+            "employee_template_name": self.employee_template_name_var.get().strip(),
+            "employee_list_templates": self.employee_list_templates,
         }
         try:
             self.state.ui_state_file.write_text(
@@ -260,6 +327,82 @@ class TreeSolutionUI:
             )
         except Exception:
             pass
+
+    def _sanitize_employee_templates(self, templates_raw) -> list[dict]:
+        out: list[dict] = []
+        if not isinstance(templates_raw, list):
+            return out
+        for item in templates_raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            file_path = str(item.get("file", "")).strip()
+            sheet = str(item.get("sheet", "")).strip()
+            mode = str(item.get("mode", "include")).strip().casefold()
+            active = bool(item.get("active", True))
+            if not name or not file_path:
+                continue
+            if mode not in ("include", "exclude"):
+                mode = "include"
+            out.append(
+                {
+                    "name": name,
+                    "file": file_path,
+                    "sheet": sheet,
+                    "mode": mode,
+                    "active": active,
+                }
+            )
+        return out
+
+    def _refresh_employee_templates_view(self) -> None:
+        if self.employee_templates_tree is None:
+            return
+        tree = self.employee_templates_tree
+        tree.delete(*tree.get_children())
+        for i, t in enumerate(self.employee_list_templates):
+            mode_label = "einschliessen" if t.get("mode") == "include" else "ausschliessen"
+            active_label = "ja" if t.get("active", True) else "nein"
+            tree.insert(
+                "",
+                "end",
+                iid=str(i),
+                values=(
+                    str(t.get("name", "")),
+                    mode_label,
+                    active_label,
+                    str(t.get("file", "")),
+                    str(t.get("sheet", "")),
+                ),
+            )
+
+    def _get_selected_template_index(self) -> int | None:
+        if self.employee_templates_tree is None:
+            return None
+        selected = self.employee_templates_tree.selection()
+        if not selected:
+            return None
+        iid = str(selected[0])
+        if not iid.isdigit():
+            return None
+        idx = int(iid)
+        if idx < 0 or idx >= len(self.employee_list_templates):
+            return None
+        return idx
+
+    def _get_selected_template(self) -> dict | None:
+        idx = self._get_selected_template_index()
+        if idx is None:
+            return None
+        return self.employee_list_templates[idx]
+
+    def _load_selected_template_into_fields(self) -> None:
+        t = self._get_selected_template()
+        if t is None:
+            return
+        self.employee_template_name_var.set(str(t.get("name", "")))
+        self.employee_list_file_var.set(str(t.get("file", "")))
+        self.employee_list_sheet_var.set(str(t.get("sheet", "")))
 
     def _auto_load_last_users_file(self) -> None:
         if self.state.original_df is not None:
@@ -444,6 +587,143 @@ class TreeSolutionUI:
         )
         if path:
             self.employee_list_file_var.set(path)
+            if not self.employee_template_name_var.get().strip():
+                self.employee_template_name_var.set(Path(path).stem)
+            self._save_ui_state()
+
+    def _normalize_employee_list_sheet(self, list_file: str, list_sheet: str | None) -> str | None:
+        sheet = (list_sheet or "").strip() or None
+        if Path(list_file).suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
+            return None
+        return sheet
+
+    def _ensure_original_users_loaded(self) -> pd.DataFrame:
+        if self.state.original_df is None:
+            self._sync_state_paths()
+            self.state.load_users()
+            self._log(f"Benutzer automatisch geladen: {len(self.state.current_df)} aus {self.state.users_file}")
+            self._refresh_technical_flags_from_keywords()
+        if self.state.original_df is None:
+            raise RuntimeError("Zuerst Benutzerdatei laden.")
+        return self.state.original_df
+
+    def _evaluate_employee_template(
+        self,
+        template: dict,
+        df_base: pd.DataFrame,
+        flag_name: str,
+    ) -> tuple[pd.DataFrame, dict]:
+        list_file = str(template.get("file", "")).strip()
+        if not list_file:
+            raise RuntimeError(f"Vorlage '{template.get('name', '')}' hat keine Datei.")
+        list_sheet = self._normalize_employee_list_sheet(list_file, str(template.get("sheet", "")))
+        df_list = load_table(list_file, list_sheet)
+        marked_df, stats = mark_by_employee_list(df_base, df_list, flag_name=flag_name, return_stats=True)
+        return marked_df, stats
+
+    def save_employee_template(self) -> None:
+        def _run() -> None:
+            name = self.employee_template_name_var.get().strip()
+            file_path = self.employee_list_file_var.get().strip()
+            sheet = self.employee_list_sheet_var.get().strip()
+            if not name:
+                raise RuntimeError("Bitte Vorlagenname angeben.")
+            if not file_path:
+                raise RuntimeError("Bitte Mitarbeiterliste auswählen.")
+            if not Path(file_path).exists():
+                raise RuntimeError(f"Datei nicht gefunden: {file_path}")
+            sheet = self._normalize_employee_list_sheet(file_path, sheet) or ""
+
+            idx_existing = None
+            for i, t in enumerate(self.employee_list_templates):
+                if str(t.get("name", "")).strip().casefold() == name.casefold():
+                    idx_existing = i
+                    break
+
+            if idx_existing is None:
+                self.employee_list_templates.append(
+                    {"name": name, "file": file_path, "sheet": sheet, "mode": "include", "active": True}
+                )
+                self._log(f"Mitarbeiterlisten-Vorlage gespeichert: {name} (einschliessen, aktiv)")
+            else:
+                existing = self.employee_list_templates[idx_existing]
+                existing["file"] = file_path
+                existing["sheet"] = sheet
+                existing["name"] = name
+                mode_existing = str(existing.get("mode", "include")).strip().casefold()
+                existing["mode"] = mode_existing if mode_existing in ("include", "exclude") else "include"
+                existing["active"] = bool(existing.get("active", True))
+                self._log(f"Mitarbeiterlisten-Vorlage aktualisiert: {name}")
+            self._refresh_employee_templates_view()
+            self._save_ui_state()
+        self._with_errors(_run)
+
+    def remove_employee_template(self) -> None:
+        def _run() -> None:
+            idx = self._get_selected_template_index()
+            if idx is None:
+                raise RuntimeError("Bitte zuerst eine Vorlage auswählen.")
+            name = str(self.employee_list_templates[idx].get("name", ""))
+            del self.employee_list_templates[idx]
+            self._refresh_employee_templates_view()
+            self._save_ui_state()
+            self._log(f"Mitarbeiterlisten-Vorlage entfernt: {name}")
+        self._with_errors(_run)
+
+    def _set_selected_template_mode(self, mode: str) -> None:
+        idx = self._get_selected_template_index()
+        if idx is None:
+            raise RuntimeError("Bitte zuerst eine Vorlage auswählen.")
+        if mode not in ("include", "exclude"):
+            raise RuntimeError(f"Ungültiger Modus: {mode}")
+        self.employee_list_templates[idx]["mode"] = mode
+        self._refresh_employee_templates_view()
+        self._save_ui_state()
+        mode_label = "einschliessen" if mode == "include" else "ausschliessen"
+        self._log(f"Vorlage '{self.employee_list_templates[idx]['name']}' auf '{mode_label}' gesetzt.")
+
+    def toggle_selected_template_mode(self) -> None:
+        def _run() -> None:
+            idx = self._get_selected_template_index()
+            if idx is None:
+                raise RuntimeError("Bitte zuerst eine Vorlage auswählen.")
+            current_mode = str(self.employee_list_templates[idx].get("mode", "include")).strip().casefold()
+            next_mode = "exclude" if current_mode == "include" else "include"
+            self._set_selected_template_mode(next_mode)
+        self._with_errors(_run)
+
+    def toggle_selected_template_active(self) -> None:
+        def _run() -> None:
+            idx = self._get_selected_template_index()
+            if idx is None:
+                raise RuntimeError("Bitte zuerst eine Vorlage auswählen.")
+            current = bool(self.employee_list_templates[idx].get("active", True))
+            self.employee_list_templates[idx]["active"] = not current
+            self._refresh_employee_templates_view()
+            self._save_ui_state()
+            active_label = "aktiv" if not current else "inaktiv"
+            self._log(f"Vorlage '{self.employee_list_templates[idx]['name']}' ist jetzt {active_label}.")
+        self._with_errors(_run)
+
+    def load_selected_employee_template(self) -> None:
+        def _run() -> None:
+            idx = self._get_selected_template_index()
+            if idx is None:
+                raise RuntimeError("Bitte zuerst eine Vorlage auswählen.")
+            template = self.employee_list_templates[idx]
+            df_base = self._ensure_original_users_loaded()
+            flag_name = f"flag_employee_template_{idx}"
+            marked_df, stats = self._evaluate_employee_template(template, df_base, flag_name=flag_name)
+            self.state.flag_cache[flag_name] = marked_df.copy()
+            matched_df = marked_df[marked_df[flag_name] == True].copy()
+            self.state.current_df = matched_df
+            hits = len(matched_df)
+            self._log(
+                f"Vorlage geladen: {template['name']} | Treffer: {hits} | "
+                f"Listeneinträge ohne Treffer: {stats['employee_entries_unmatched']}"
+            )
+            self.preview_current()
+        self._with_errors(_run)
 
     def load_users(self) -> None:
         def _run() -> None:
@@ -496,36 +776,49 @@ class TreeSolutionUI:
 
     def mark_employee_list(self) -> None:
         def _run() -> None:
-            if self.state.original_df is None:
-                self._sync_state_paths()
-                self.state.load_users()
-                self._log(f"Benutzer automatisch geladen: {len(self.state.current_df)} aus {self.state.users_file}")
-                self._refresh_technical_flags_from_keywords()
-            df = self.state.original_df
-            list_file = self.employee_list_file_var.get().strip()
-            if not list_file:
-                raise RuntimeError("Bitte Mitarbeiterliste auswählen.")
-            list_sheet = self.employee_list_sheet_var.get().strip() or None
-            if Path(list_file).suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
-                list_sheet = None
+            df_base = self._ensure_original_users_loaded()
+            active_templates = [t for t in self.employee_list_templates if bool(t.get("active", True))]
+            if not active_templates:
+                raise RuntimeError("Keine aktiven Vorlagen vorhanden.")
 
-            flag_name = "flag_employee_list"
-            df_list = load_table(list_file, list_sheet)
-            marked_df, stats = mark_by_employee_list(
-                df, df_list, flag_name=flag_name, return_stats=True
-            )
-            self.state.flag_cache[flag_name] = marked_df.copy()
-            self.state.current_df = marked_df.copy()
-            hits = int(marked_df[flag_name].sum())
-            self._log(f"Mitarbeiterliste geprüft ({flag_name}). Treffer: {hits}")
+            include_indices = [i for i, t in enumerate(self.employee_list_templates) if bool(t.get("active", True)) and t.get("mode") == "include"]
+            exclude_indices = [i for i, t in enumerate(self.employee_list_templates) if bool(t.get("active", True)) and t.get("mode") == "exclude"]
+
+            include_mask = pd.Series(False, index=df_base.index)
+            exclude_mask = pd.Series(False, index=df_base.index)
+
+            for i, template in enumerate(self.employee_list_templates):
+                if not bool(template.get("active", True)):
+                    continue
+                flag_name = f"flag_employee_template_{i}"
+                marked_df, stats = self._evaluate_employee_template(template, df_base, flag_name=flag_name)
+                self.state.flag_cache[flag_name] = marked_df.copy()
+                hits = int(marked_df[flag_name].sum())
+                mode = str(template.get("mode", "include"))
+                mode_label = "einschliessen" if mode == "include" else "ausschliessen"
+                self._log(
+                    f"Vorlage '{template['name']}' ({mode_label}) geprüft. Treffer: {hits} | "
+                    f"Listeneinträge ohne Treffer: {stats['employee_entries_unmatched']}"
+                )
+                if mode == "include":
+                    include_mask = include_mask | (marked_df[flag_name] == True)
+                else:
+                    exclude_mask = exclude_mask | (marked_df[flag_name] == True)
+
+            if include_indices:
+                selected_df = df_base[include_mask].copy()
+            else:
+                selected_df = df_base.copy()
+
+            if exclude_indices and not selected_df.empty:
+                exclude_ids = set(df_base[exclude_mask].index.tolist())
+                selected_df = selected_df[~selected_df.index.isin(exclude_ids)].copy()
+
+            self.state.current_df = selected_df
             self._log(
-                "Listeneinträge ohne Treffer: "
-                f"{stats['employee_entries_unmatched']} "
-                f"(gematcht: {stats['employee_entries_matched']} / berücksichtigt: {stats['employee_entries_total']})"
+                f"Aktive Vorlagen angewendet. Einschliessen: {len(include_indices)} | "
+                f"Ausschliessen: {len(exclude_indices)} | Verbleibend: {len(selected_df)}"
             )
-
-            self.state.current_df = marked_df[marked_df[flag_name] == True].copy()
-            self._log(f"Nach Liste gefiltert. Verbleibend: {len(self.state.current_df)}")
             self.preview_current()
         self._with_errors(_run)
 
