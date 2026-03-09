@@ -214,6 +214,12 @@ class TreeSolutionUI:
             command=self.show_batch_export_window,
             width=40,
         ).grid(row=1, column=0, padx=4, pady=4, sticky="w")
+        tk.Button(
+            export_box,
+            text="Batch-Merkliste zurücksetzen",
+            command=self.reset_batch_export_tracker,
+            width=32,
+        ).grid(row=1, column=1, padx=4, pady=4, sticky="w")
 
         preview = tk.LabelFrame(self.root, text="Vorschau / Log", padx=10, pady=10)
         preview.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -1206,14 +1212,22 @@ class TreeSolutionUI:
         if df is None:
             messagebox.showinfo("Keine Daten", "Noch keine Benutzerdatei geladen.")
             return
-        df_snapshot = df.copy()
+        _, eligible_df_start, already_df_start, remaining_df_start = self._get_batch_remaining_df(df)
+        df_snapshot = remaining_df_start.drop(columns=["__batch_id"], errors="ignore").copy()
+        if df_snapshot.empty:
+            messagebox.showinfo(
+                "Keine neuen IDs",
+                "Es sind keine neuen batch-fähigen IDs mehr vorhanden.\n"
+                "Alle IDs aus der aktuellen Auswahl wurden bereits exportiert oder haben keine ID.",
+            )
+            return
         batch_size_var = tk.StringVar(value=str(len(df_snapshot)))
         previous_output_csv = self.output_file_var.get().strip()
         self.output_file_var.set("Batch-Upload.csv")
         self.state.output_file = "Batch-Upload.csv"
 
         win = tk.Toplevel(self.root)
-        win.title(f"Batch-Export ({len(df_snapshot)} Zeilen in aktueller Auswahl)")
+        win.title(f"Batch-Export ({len(df_snapshot)} Zeilen nach Ausschluss gemerkter IDs)")
         win.geometry("1250x760")
         self._make_modal(win)
 
@@ -1333,7 +1347,8 @@ class TreeSolutionUI:
                 tree.insert("", "end", values=values, tags=("odd" if i % 2 else "even",))
 
             stats_var.set(
-                f"Aktuelle Auswahl: {len(df_snapshot)} | Mit ID (batch-fähig): {len(eligible_df)} | "
+                f"Ausgangsauswahl batch-fähig: {len(eligible_df_start)} | "
+                f"Bereits exportiert: {len(already_df_start)} | "
                 f"Noch nicht exportiert: {len(remaining_df)}"
             )
             filter_info = ""
@@ -1470,10 +1485,6 @@ class TreeSolutionUI:
             self._with_errors(lambda: self._export_next_batch_from_df(df_snapshot))
             refresh_view()
 
-        def run_reset_and_refresh() -> None:
-            self.reset_batch_export_tracker()
-            refresh_view()
-
         def _restore_output_field_on_close() -> None:
             # Restore the main UI field value after closing the batch window.
             self.output_file_var.set(previous_output_csv)
@@ -1497,12 +1508,6 @@ class TreeSolutionUI:
             command=lambda: self._with_errors(refresh_view),
             width=36,
         ).grid(row=1, column=3, padx=4, pady=4, sticky="w")
-        tk.Button(
-            controls,
-            text="Batch-Merkliste zurücksetzen",
-            command=run_reset_and_refresh,
-            width=36,
-        ).grid(row=2, column=3, padx=4, pady=4, sticky="w")
 
         # Enter in batch fields refreshes the proposed batch preview.
         for child in controls.winfo_children():
