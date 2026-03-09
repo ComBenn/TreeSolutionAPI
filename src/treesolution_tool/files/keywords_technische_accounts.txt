@@ -66,3 +66,4 @@ Covid
 Polyanalytic
 andro
 hin
+ADMIN

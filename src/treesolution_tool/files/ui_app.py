@@ -134,8 +134,12 @@ class TreeSolutionUI:
 
         tk.Button(actions, text="Benutzer laden", command=self.load_users, width=24).grid(row=0, column=0, padx=4, pady=4, sticky="w")
         tk.Button(actions, text="Auswahl zurücksetzen", command=self.reset_users, width=24).grid(row=0, column=1, padx=4, pady=4, sticky="w")
-        tk.Button(actions, text="Nur technische auswählen", command=self.keep_technical, width=24).grid(row=1, column=0, padx=4, pady=4, sticky="w")
-        tk.Button(actions, text="Technische ausschliessen", command=self.exclude_technical, width=24).grid(row=1, column=1, padx=4, pady=4, sticky="w")
+
+        technical = tk.LabelFrame(self.root, text="Technische Accounts", padx=10, pady=10)
+        technical.pack(fill="x", padx=10, pady=(0, 10))
+        tk.Button(technical, text="Keyword-Datei öffnen", command=self.show_keywords, width=22).grid(row=0, column=0, padx=4, pady=4, sticky="w")
+        tk.Button(technical, text="Nur technische auswählen", command=self.keep_technical, width=24).grid(row=0, column=1, padx=4, pady=4, sticky="w")
+        tk.Button(technical, text="Technische ausschliessen", command=self.exclude_technical, width=24).grid(row=0, column=2, padx=4, pady=4, sticky="w")
 
         employee = tk.LabelFrame(self.root, text="Mitarbeiterliste", padx=10, pady=10)
         employee.pack(fill="x", padx=10, pady=(0, 10))
@@ -144,10 +148,6 @@ class TreeSolutionUI:
         self._build_entry_row(employee, "Liste Sheet", self.employee_list_sheet_var, row=1, on_enter=self.mark_employee_list)
 
         tk.Button(employee, text="Nach Liste filtern", command=self.mark_employee_list, width=28).grid(row=0, column=3, padx=4, pady=4, sticky="w")
-
-        kw_box = tk.LabelFrame(self.root, text="Keywords", padx=10, pady=10)
-        kw_box.pack(fill="x", padx=10, pady=(0, 10))
-        tk.Button(kw_box, text="Keyword-Datei öffnen", command=self.show_keywords, width=22).grid(row=0, column=0, padx=4, pady=4, sticky="w")
 
         export_box = tk.LabelFrame(self.root, text="Export", padx=10, pady=10)
         export_box.pack(fill="x", padx=10, pady=(0, 10))
@@ -600,7 +600,14 @@ class TreeSolutionUI:
         if df is None:
             messagebox.showinfo("Keine Daten", "Noch keine Benutzerdatei geladen.")
             return
-        view_state = {"df": df.copy()}
+        view_state = {
+            "base_df": df.copy(),
+            "display_df": df.copy(),
+            "sort_col": None,
+            "sort_asc": True,
+            "filters": {},
+            "iid_to_index": {},
+        }
         previous_output_csv = self.output_file_var.get().strip()
         self.output_file_var.set("Upload.csv")
         self.state.output_file = "Upload.csv"
@@ -613,7 +620,8 @@ class TreeSolutionUI:
         container = tk.Frame(win, padx=8, pady=8)
         container.pack(fill="both", expand=True)
 
-        info = tk.Label(container, text=f"{len(df)} Zeilen | {len(df.columns)} Spalten", anchor="w")
+        info_var = tk.StringVar(value=f"{len(df)} Zeilen | {len(df.columns)} Spalten")
+        info = tk.Label(container, textvariable=info_var, anchor="w")
         info.pack(fill="x", pady=(0, 6))
 
         export_controls = tk.LabelFrame(container, text="Export für diese Auswahl", padx=8, pady=8)
@@ -623,27 +631,36 @@ class TreeSolutionUI:
             "Output CSV",
             self.output_file_var,
             row=0,
-            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["df"], initialfile="Upload.csv")),
+            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"], initialfile="Upload.csv")),
         )
         self._build_entry_row(
             export_controls,
             "Export department",
             self.export_department_override_var,
             row=1,
-            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["df"])),
+            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"])),
         )
         tk.Button(
             export_controls,
             text="Exportieren",
-            command=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["df"], initialfile="Upload.csv")),
+            command=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"], initialfile="Upload.csv")),
             width=28,
         ).grid(row=0, column=3, padx=4, pady=4, sticky="w")
+
+        table_toolbar = tk.Frame(container)
+        table_toolbar.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            table_toolbar,
+            text="Sortieren: Klick auf Spaltenkopf | Filtern: Rechtsklick auf Spaltenkopf (Dropdown)",
+            anchor="w",
+        ).pack(side="left")
 
         table_frame = tk.Frame(container)
         table_frame.pack(fill="both", expand=True)
 
         columns = [str(c) for c in df.columns]
         tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="extended")
+
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
         hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
         tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -662,39 +679,186 @@ class TreeSolutionUI:
         tree.tag_configure("odd", background="#f6f8fb")
         tree.tag_configure("even", background="#ffffff")
 
+        def _sort_key(value: str):
+            text = (value or "").strip()
+            if text == "":
+                return (2, 0.0, "")
+            candidate = text.replace(",", ".")
+            try:
+                return (0, float(candidate), "")
+            except ValueError:
+                return (1, 0.0, text.casefold())
+
+        def _apply_filters_and_sort() -> None:
+            current_df = view_state["base_df"]
+            filtered_df = current_df
+            for col, term in view_state["filters"].items():
+                if col not in filtered_df.columns:
+                    continue
+                term_norm = str(term).strip().casefold()
+                if not term_norm:
+                    continue
+                series = filtered_df[col].fillna("").astype(str).str.casefold()
+                filtered_df = filtered_df[series.str.contains(term_norm, regex=False)]
+
+            sort_col = view_state["sort_col"]
+            if sort_col and sort_col in filtered_df.columns:
+                sort_series = filtered_df[sort_col].fillna("").astype(str)
+                sort_keys = sort_series.map(_sort_key)
+                filtered_df = filtered_df.assign(__sort_key=sort_keys).sort_values(
+                    by="__sort_key",
+                    ascending=view_state["sort_asc"],
+                    kind="mergesort",
+                ).drop(columns=["__sort_key"])
+            view_state["display_df"] = filtered_df.copy()
+
         def refresh_selection_table() -> None:
-            current_df = view_state["df"]
+            _apply_filters_and_sort()
+            display_df = view_state["display_df"]
             tree.delete(*tree.get_children())
-            for i, (_, row) in enumerate(current_df.fillna("").astype(str).iterrows()):
+            iid_to_index = {}
+            for i, (idx, row) in enumerate(display_df.fillna("").astype(str).iterrows()):
                 values = [row.get(col, "") for col in columns]
-                tree.insert("", "end", iid=str(i), values=values, tags=("odd" if i % 2 else "even",))
-            self.state.current_df = current_df.copy()
+                iid = str(i)
+                tree.insert("", "end", iid=iid, values=values, tags=("odd" if i % 2 else "even",))
+                iid_to_index[iid] = idx
+            view_state["iid_to_index"] = iid_to_index
+            self.state.current_df = view_state["base_df"].copy()
+            filter_info = ""
+            if view_state["filters"]:
+                parts = [f"{col}='{term}'" for col, term in view_state["filters"].items()]
+                filter_info = " | Filter: " + " ; ".join(parts[:3])
+                if len(parts) > 3:
+                    filter_info += f" (+{len(parts) - 3})"
+            info_var.set(
+                f"{len(view_state['base_df'])} Zeilen gesamt | "
+                f"{len(display_df)} Zeilen angezeigt | "
+                f"{len(columns)} Spalten"
+                f"{filter_info}"
+            )
             self._refresh_status()
 
-        menu = tk.Menu(win, tearoff=0)
+        row_menu = tk.Menu(win, tearoff=0)
+        header_menu = tk.Menu(win, tearoff=0)
+        active_header_col = {"name": None}
 
         def remove_selected_entries() -> None:
             selected = tree.selection()
             if not selected:
                 return
-            positions = sorted({int(iid) for iid in selected if str(iid).isdigit()}, reverse=True)
-            if not positions:
-                return
-            current_df = view_state["df"]
+            current_df = view_state["base_df"]
             if current_df.empty:
                 return
-            valid_positions = [p for p in positions if 0 <= p < len(current_df)]
-            if not valid_positions:
+            row_indices = [
+                view_state["iid_to_index"].get(str(iid))
+                for iid in selected
+                if str(iid) in view_state["iid_to_index"]
+            ]
+            valid_indices = [idx for idx in row_indices if idx in current_df.index]
+            if not valid_indices:
                 return
-            drop_idx = current_df.iloc[valid_positions].index
-            view_state["df"] = current_df.drop(index=drop_idx).copy()
-            self.state.current_df = view_state["df"].copy()
-            self._log(f"Einträge aus Auswahl entfernt: {len(valid_positions)} | Verbleibend: {len(view_state['df'])}")
+            view_state["base_df"] = current_df.drop(index=valid_indices).copy()
+            self.state.current_df = view_state["base_df"].copy()
+            self._log(f"Einträge aus Auswahl entfernt: {len(valid_indices)} | Verbleibend: {len(view_state['base_df'])}")
             refresh_selection_table()
 
-        menu.add_command(label="Eintrag entfernen", command=lambda: self._with_errors(remove_selected_entries))
+        row_menu.add_command(label="Eintrag entfernen", command=lambda: self._with_errors(remove_selected_entries))
+
+        def _open_header_filter_dialog(col: str) -> None:
+            if not col:
+                return
+            dialog = tk.Toplevel(win)
+            dialog.title(f"Filter: {col}")
+            dialog.geometry("460x140")
+            dialog.resizable(False, False)
+            self._make_modal(dialog)
+
+            body = tk.Frame(dialog, padx=10, pady=10)
+            body.pack(fill="both", expand=True)
+
+            tk.Label(body, text=f"Filter für Spalte '{col}' (enthält):", anchor="w").grid(
+                row=0, column=0, padx=4, pady=4, sticky="w"
+            )
+            raw_values = (
+                view_state["base_df"][col]
+                .fillna("")
+                .astype(str)
+                .map(lambda x: x.strip())
+            )
+            unique_values = sorted({v for v in raw_values if v != ""}, key=lambda x: x.casefold())
+            value_var = tk.StringVar(value=str(view_state["filters"].get(col, "")))
+            combo = ttk.Combobox(body, textvariable=value_var, values=unique_values[:1000], width=52)
+            combo.grid(row=1, column=0, padx=4, pady=4, sticky="we")
+            combo.focus_set()
+
+            def _apply() -> None:
+                term = value_var.get().strip()
+                if term:
+                    view_state["filters"][col] = term
+                else:
+                    view_state["filters"].pop(col, None)
+                refresh_selection_table()
+                dialog.destroy()
+
+            def _clear() -> None:
+                view_state["filters"].pop(col, None)
+                refresh_selection_table()
+                dialog.destroy()
+
+            buttons = tk.Frame(body)
+            buttons.grid(row=2, column=0, pady=(8, 0), sticky="e")
+            tk.Button(buttons, text="Filter setzen", command=lambda: self._with_errors(_apply), width=14).pack(side="left", padx=(0, 6))
+            tk.Button(buttons, text="Filter löschen", command=lambda: self._with_errors(_clear), width=14).pack(side="left", padx=(0, 6))
+            tk.Button(buttons, text="Abbrechen", command=dialog.destroy, width=12).pack(side="left")
+
+            combo.bind("<Return>", lambda _e: self._with_errors(_apply))
+            dialog.bind("<Escape>", lambda _e: dialog.destroy())
+
+        def _clear_header_filter(col: str) -> None:
+            if not col:
+                return
+            view_state["filters"].pop(col, None)
+            refresh_selection_table()
+
+        header_menu.add_command(
+            label="Filter setzen...",
+            command=lambda: self._with_errors(lambda: _open_header_filter_dialog(str(active_header_col["name"] or ""))),
+        )
+        header_menu.add_command(
+            label="Filter dieser Spalte löschen",
+            command=lambda: self._with_errors(lambda: _clear_header_filter(str(active_header_col["name"] or ""))),
+        )
+
+        def sort_by_column(col: str) -> None:
+            if view_state["sort_col"] == col:
+                view_state["sort_asc"] = not view_state["sort_asc"]
+            else:
+                view_state["sort_col"] = col
+                view_state["sort_asc"] = True
+            refresh_selection_table()
+
+        def _column_from_event(event) -> str | None:
+            region = tree.identify_region(event.x, event.y)
+            if region != "heading":
+                return None
+            col_id = tree.identify_column(event.x)
+            if not col_id.startswith("#"):
+                return None
+            try:
+                pos = int(col_id[1:]) - 1
+            except ValueError:
+                return None
+            if pos < 0 or pos >= len(columns):
+                return None
+            return columns[pos]
 
         def show_context_menu(event) -> None:
+            header_col = _column_from_event(event)
+            if header_col:
+                active_header_col["name"] = header_col
+                header_menu.tk_popup(event.x_root, event.y_root)
+                header_menu.grab_release()
+                return
             row_id = tree.identify_row(event.y)
             if row_id:
                 current_selection = tree.selection()
@@ -702,10 +866,24 @@ class TreeSolutionUI:
                     tree.selection_set(row_id)
                 tree.focus(row_id)
             if tree.selection():
-                menu.tk_popup(event.x_root, event.y_root)
-            menu.grab_release()
+                row_menu.tk_popup(event.x_root, event.y_root)
+            row_menu.grab_release()
 
         tree.bind("<Button-3>", show_context_menu)
+
+        for col in columns:
+            tree.heading(col, text=col, command=lambda c=col: self._with_errors(lambda: sort_by_column(c)))
+
+        def clear_all_filters() -> None:
+            view_state["filters"].clear()
+            refresh_selection_table()
+
+        tk.Button(
+            table_toolbar,
+            text="Alle Filter löschen",
+            command=lambda: self._with_errors(clear_all_filters),
+            width=18,
+        ).pack(side="right")
         refresh_selection_table()
 
         def _restore_output_field_on_close() -> None:
@@ -776,9 +954,23 @@ class TreeSolutionUI:
         tk.Label(controls, textvariable=details_var, anchor="w").grid(row=4, column=0, columnspan=3, padx=4, pady=2, sticky="w")
         tk.Label(controls, textvariable=tracker_var, anchor="w").grid(row=5, column=0, columnspan=3, padx=4, pady=2, sticky="w")
 
+        table_toolbar = tk.Frame(container)
+        table_toolbar.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            table_toolbar,
+            text="Sortieren: Klick auf Spaltenkopf | Filtern: Rechtsklick auf Spaltenkopf (Dropdown)",
+            anchor="w",
+        ).pack(side="left")
+
         table_frame = tk.Frame(container)
         table_frame.pack(fill="both", expand=True)
 
+        batch_view_state = {
+            "sort_col": None,
+            "sort_asc": True,
+            "filters": {},
+            "last_source_df": pd.DataFrame(),
+        }
         columns = [str(c) for c in df_snapshot.columns]
         tree = ttk.Treeview(table_frame, columns=columns, show="headings")
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
@@ -797,6 +989,38 @@ class TreeSolutionUI:
         tree.tag_configure("odd", background="#f6f8fb")
         tree.tag_configure("even", background="#ffffff")
 
+        def _sort_key(value: str):
+            text = (value or "").strip()
+            if text == "":
+                return (2, 0.0, "")
+            candidate = text.replace(",", ".")
+            try:
+                return (0, float(candidate), "")
+            except ValueError:
+                return (1, 0.0, text.casefold())
+
+        def _apply_filters_and_sort(df_in: pd.DataFrame) -> pd.DataFrame:
+            filtered_df = df_in
+            for col, term in batch_view_state["filters"].items():
+                if col not in filtered_df.columns:
+                    continue
+                term_norm = str(term).strip().casefold()
+                if not term_norm:
+                    continue
+                series = filtered_df[col].fillna("").astype(str).str.casefold()
+                filtered_df = filtered_df[series.str.contains(term_norm, regex=False)]
+
+            sort_col = batch_view_state["sort_col"]
+            if sort_col and sort_col in filtered_df.columns:
+                sort_series = filtered_df[sort_col].fillna("").astype(str)
+                sort_keys = sort_series.map(_sort_key)
+                filtered_df = filtered_df.assign(__sort_key=sort_keys).sort_values(
+                    by="__sort_key",
+                    ascending=batch_view_state["sort_asc"],
+                    kind="mergesort",
+                ).drop(columns=["__sort_key"])
+            return filtered_df
+
         def refresh_view() -> None:
             _, eligible_df, already_df, remaining_df = self._get_batch_remaining_df(df_snapshot)
             try:
@@ -807,8 +1031,10 @@ class TreeSolutionUI:
                 raise RuntimeError("Batch-Grösse muss grösser als 0 sein.")
 
             selected_batch_df = remaining_df.head(batch_size).copy()
+            source_df = selected_batch_df.drop(columns=["__batch_id"], errors="ignore")
+            batch_view_state["last_source_df"] = source_df.copy()
+            display_df = _apply_filters_and_sort(source_df)
             tree.delete(*tree.get_children())
-            display_df = selected_batch_df.drop(columns=["__batch_id"], errors="ignore")
             for i, (_, row) in enumerate(display_df.fillna("").astype(str).iterrows()):
                 values = [row.get(col, "") for col in columns]
                 tree.insert("", "end", values=values, tags=("odd" if i % 2 else "even",))
@@ -817,12 +1043,132 @@ class TreeSolutionUI:
                 f"Aktuelle Auswahl: {len(df_snapshot)} | Mit ID (batch-fähig): {len(eligible_df)} | "
                 f"Noch nicht exportiert: {len(remaining_df)}"
             )
+            filter_info = ""
+            if batch_view_state["filters"]:
+                parts = [f"{col}='{term}'" for col, term in batch_view_state["filters"].items()]
+                filter_info = " | Filter: " + " ; ".join(parts[:3])
+                if len(parts) > 3:
+                    filter_info += f" (+{len(parts) - 3})"
             details_var.set(
-                f"Batch-Auswahl aktuell angezeigt: {len(selected_batch_df)} | "
+                f"Batch-Auswahl: {len(source_df)} | Davon angezeigt: {len(display_df)} | "
                 f"Bereits exportiert (in dieser Auswahl): {len(already_df)} | "
                 f"Batch-Merkliste gesamt: {len(self.state.batch_exported_ids)} IDs"
+                f"{filter_info}"
             )
             tracker_var.set(f"Merkliste-Datei: {self.state.batch_export_tracker_file.name}")
+
+        active_header_col = {"name": None}
+        header_menu = tk.Menu(win, tearoff=0)
+
+        def _open_header_filter_dialog(col: str) -> None:
+            if not col:
+                return
+            source_df = batch_view_state["last_source_df"]
+            if source_df is None or source_df.empty or col not in source_df.columns:
+                source_df = pd.DataFrame(columns=columns)
+
+            dialog = tk.Toplevel(win)
+            dialog.title(f"Filter: {col}")
+            dialog.geometry("460x140")
+            dialog.resizable(False, False)
+            self._make_modal(dialog)
+
+            body = tk.Frame(dialog, padx=10, pady=10)
+            body.pack(fill="both", expand=True)
+
+            tk.Label(body, text=f"Filter für Spalte '{col}' (enthält):", anchor="w").grid(
+                row=0, column=0, padx=4, pady=4, sticky="w"
+            )
+            raw_values = source_df[col].fillna("").astype(str).map(lambda x: x.strip()) if col in source_df.columns else pd.Series(dtype=str)
+            unique_values = sorted({v for v in raw_values if v != ""}, key=lambda x: x.casefold())
+            value_var = tk.StringVar(value=str(batch_view_state["filters"].get(col, "")))
+            combo = ttk.Combobox(body, textvariable=value_var, values=unique_values[:1000], width=52)
+            combo.grid(row=1, column=0, padx=4, pady=4, sticky="we")
+            combo.focus_set()
+
+            def _apply() -> None:
+                term = value_var.get().strip()
+                if term:
+                    batch_view_state["filters"][col] = term
+                else:
+                    batch_view_state["filters"].pop(col, None)
+                refresh_view()
+                dialog.destroy()
+
+            def _clear() -> None:
+                batch_view_state["filters"].pop(col, None)
+                refresh_view()
+                dialog.destroy()
+
+            buttons = tk.Frame(body)
+            buttons.grid(row=2, column=0, pady=(8, 0), sticky="e")
+            tk.Button(buttons, text="Filter setzen", command=lambda: self._with_errors(_apply), width=14).pack(side="left", padx=(0, 6))
+            tk.Button(buttons, text="Filter löschen", command=lambda: self._with_errors(_clear), width=14).pack(side="left", padx=(0, 6))
+            tk.Button(buttons, text="Abbrechen", command=dialog.destroy, width=12).pack(side="left")
+
+            combo.bind("<Return>", lambda _e: self._with_errors(_apply))
+            dialog.bind("<Escape>", lambda _e: dialog.destroy())
+
+        def _clear_header_filter(col: str) -> None:
+            if not col:
+                return
+            batch_view_state["filters"].pop(col, None)
+            refresh_view()
+
+        header_menu.add_command(
+            label="Filter setzen...",
+            command=lambda: self._with_errors(lambda: _open_header_filter_dialog(str(active_header_col["name"] or ""))),
+        )
+        header_menu.add_command(
+            label="Filter dieser Spalte löschen",
+            command=lambda: self._with_errors(lambda: _clear_header_filter(str(active_header_col["name"] or ""))),
+        )
+
+        def sort_by_column(col: str) -> None:
+            if batch_view_state["sort_col"] == col:
+                batch_view_state["sort_asc"] = not batch_view_state["sort_asc"]
+            else:
+                batch_view_state["sort_col"] = col
+                batch_view_state["sort_asc"] = True
+            refresh_view()
+
+        def _column_from_event(event) -> str | None:
+            region = tree.identify_region(event.x, event.y)
+            if region != "heading":
+                return None
+            col_id = tree.identify_column(event.x)
+            if not col_id.startswith("#"):
+                return None
+            try:
+                pos = int(col_id[1:]) - 1
+            except ValueError:
+                return None
+            if pos < 0 or pos >= len(columns):
+                return None
+            return columns[pos]
+
+        def show_header_menu(event) -> None:
+            header_col = _column_from_event(event)
+            if not header_col:
+                return
+            active_header_col["name"] = header_col
+            header_menu.tk_popup(event.x_root, event.y_root)
+            header_menu.grab_release()
+
+        tree.bind("<Button-3>", show_header_menu)
+        for col in columns:
+            tree.heading(col, text=col, command=lambda c=col: self._with_errors(lambda: sort_by_column(c)))
+
+        def clear_all_filters() -> None:
+            batch_view_state["filters"].clear()
+            refresh_view()
+
+        tk.Button(
+            table_toolbar,
+            text="Alle Filter löschen",
+            command=lambda: self._with_errors(clear_all_filters),
+            width=18,
+        ).pack(side="right")
 
         def run_batch_export() -> None:
             self.batch_export_count_var.set(batch_size_var.get())

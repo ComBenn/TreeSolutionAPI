@@ -16,17 +16,24 @@ from config import (
 from io_utils import require_columns
 
 
+def _is_technical_export_column(col_name: str) -> bool:
+    name = str(col_name).strip().lower()
+    return name.startswith("flag_") or name.startswith("__")
+
+
 def build_upload_export(df: pd.DataFrame, department_override: str | None = None) -> pd.DataFrame:
     """
     Erzeugt einen Export auf Basis der importierten Struktur:
-    - alle vorhandenen Spalten bleiben erhalten (Reihenfolge bleibt erhalten)
+    - fachliche Spalten bleiben erhalten (Reihenfolge bleibt erhalten)
+    - technische Hilfsspalten (z.B. flag_*, __*) werden entfernt
     - Standardfelder werden bei Bedarf gesetzt/ueberschrieben
     - fehlende Upload-Spalten werden ergaenzt
     """
     required = [COL_ID, COL_USERNAME, COL_EMAIL, COL_FIRSTNAME, COL_LASTNAME]
     require_columns(df, required, "Exportquelle")
 
-    out = df.copy()
+    keep_cols = [c for c in df.columns if not _is_technical_export_column(c)]
+    out = df.loc[:, keep_cols].copy()
     out = out.fillna("")
 
     # Standardspalten als String normalisieren (falls vorhanden)
@@ -55,4 +62,4 @@ def export_utf8_csv(df: pd.DataFrame, path: str):
     """
     UTF-8 mit BOM (utf-8-sig), damit Excel Umlaute sauber erkennt.
     """
-    df.to_csv(path, index=False, encoding="utf-8-sig")
+    df.to_csv(path, index=False, encoding="utf-8-sig", sep=";")
