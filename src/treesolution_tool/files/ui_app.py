@@ -102,7 +102,8 @@ class TreeSolutionUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("TreeSolution API Helper")
-        self.root.geometry("1100x760")
+        self.root.geometry("1400x920")
+        self.root.minsize(1200, 820)
 
         self.state = AppState()
 
@@ -811,14 +812,12 @@ class TreeSolutionUI:
                 else:
                     exclude_mask = exclude_mask | (marked_df[flag_name] == True)
 
+            # Ausgang ist immer die komplette Benutzerdatei.
+            # exclude entfernt Treffer; include fügt Treffer wieder hinzu (Override).
+            selected_mask = ~exclude_mask
             if include_indices:
-                selected_df = df_base[include_mask].copy()
-            else:
-                selected_df = df_base.copy()
-
-            if exclude_indices and not selected_df.empty:
-                exclude_ids = set(df_base[exclude_mask].index.tolist())
-                selected_df = selected_df[~selected_df.index.isin(exclude_ids)].copy()
+                selected_mask = selected_mask | include_mask
+            selected_df = df_base[selected_mask].copy()
 
             self.state.current_df = selected_df
             self._log(
