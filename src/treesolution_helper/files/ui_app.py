@@ -700,6 +700,40 @@ class TreeSolutionHelperUI:
             return None
         return columns[pos]
 
+    def _copy_treeview_selection(self, tree: ttk.Treeview, columns: list[str]) -> str:
+        selected = tree.selection()
+        if not selected:
+            return "break"
+
+        lines = ["\t".join(columns)]
+        for item_id in selected:
+            values = tree.item(item_id, "values")
+            row = [str(v) for v in values[: len(columns)]]
+            if len(row) < len(columns):
+                row.extend([""] * (len(columns) - len(row)))
+            lines.append("\t".join(row))
+
+        self.root.clipboard_clear()
+        self.root.clipboard_append("\n".join(lines))
+        self._log(f"Tabellenzeilen in Zwischenablage kopiert: {len(selected)}")
+        return "break"
+
+    def _bind_treeview_shortcuts(self, tree: ttk.Treeview, columns: list[str]) -> None:
+        def _select_all(_event=None) -> str:
+            children = tree.get_children()
+            if children:
+                tree.selection_set(children)
+                tree.focus(children[0])
+            return "break"
+
+        def _copy(_event=None) -> str:
+            return self._copy_treeview_selection(tree, columns)
+
+        tree.bind("<Control-a>", _select_all)
+        tree.bind("<Control-A>", _select_all)
+        tree.bind("<Control-c>", _copy)
+        tree.bind("<Control-C>", _copy)
+
     def _open_contains_filter_dialog(
         self,
         parent: tk.Toplevel,
@@ -1516,6 +1550,7 @@ class TreeSolutionHelperUI:
             row_menu.grab_release()
 
         tree.bind("<Button-3>", show_context_menu)
+        self._bind_treeview_shortcuts(tree, columns)
 
         for col in columns:
             tree.heading(col, text=col, command=lambda c=col: self._with_errors(lambda: sort_by_column(c)))
@@ -1736,6 +1771,7 @@ class TreeSolutionHelperUI:
             header_menu.grab_release()
 
         tree.bind("<Button-3>", show_header_menu)
+        self._bind_treeview_shortcuts(tree, columns)
         for col in columns:
             tree.heading(col, text=col, command=lambda c=col: self._with_errors(lambda: sort_by_column(c)))
 
