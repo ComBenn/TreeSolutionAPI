@@ -211,6 +211,30 @@ Das Build-Ergebnis liegt danach unter:
 dist/TreeSolutionHelper.exe
 ```
 
+## GitHub Releases
+
+Das Repository ist so vorbereitet, dass GitHub Actions die aktuelle `TreeSolutionHelper.exe` automatisch baut.
+
+Workflow:
+
+- manueller Start ueber `Actions > Build TreeSolutionHelper > Run workflow`
+- automatischer Build beim Veroeffentlichen eines GitHub Releases
+
+Verhalten des Workflows:
+
+- Build auf `windows-latest`
+- Installation von `requirements.txt`, `pyinstaller` und `jinja2`
+- Build von `TreeSolutionHelper.exe`
+- Upload der EXE als Workflow-Artefakt
+- bei einem veroeffentlichten GitHub Release zusaetzlich Upload der EXE direkt an das Release
+
+Empfohlener Release-Ablauf:
+
+1. Aenderungen committen und pushen
+2. auf GitHub ein neues Release erstellen und veroeffentlichen
+3. GitHub Actions baut automatisch die aktuelle EXE
+4. die fertige `TreeSolutionHelper.exe` steht danach im Release als Asset bereit
+
 ## Aktueller Repository-Ansatz
 
 Das Repository ist auf Quellcode fokussiert.
