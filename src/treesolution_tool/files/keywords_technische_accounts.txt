@@ -1,3 +1,14 @@
+Facturation
+Duty
+Smartlab
+loeschen
+upload
+FrontDesk
+SendMail
+Testuser
+SendMail
+CalChk
+Resultats
 test
 tester
 support
@@ -67,3 +78,4 @@ Polyanalytic
 andro
 hin
 ADMIN
+Warenausgang
