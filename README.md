@@ -227,7 +227,7 @@ Verhalten des Skripts:
 - liest die aktuelle Version aus `VERSION.txt`
 - erhoeht die Minor-Version automatisch um `1`
 - baut die EXE
-- erzeugt zusaetzlich eine versionierte Datei wie `TreeSolutionHelper (V5.3).exe`
+- behaelt im `dist`-Ordner nur die versionierte Datei wie `TreeSolutionHelper (V5.3).exe`
 - schreibt die neue Version zurueck nach `VERSION.txt`
 
 Beispiel:

@@ -173,25 +173,24 @@ class TreeSolutionHelperUI:
 
         self.employee_templates_tree = ttk.Treeview(
             template_table,
-            columns=("name", "mode", "file", "sheet"),
+            columns=("name", "mode", "entries"),
             show="headings",
             height=5,
             selectmode="extended",
         )
         self.employee_templates_tree.heading("name", text="Vorlage")
         self.employee_templates_tree.heading("mode", text="Modus")
-        self.employee_templates_tree.heading("file", text="Datei")
-        self.employee_templates_tree.heading("sheet", text="Sheet")
-        self.employee_templates_tree.column("name", width=180, minwidth=120, stretch=False)
+        self.employee_templates_tree.heading("entries", text="Einträge")
+        self.employee_templates_tree.column("name", width=320, minwidth=240, stretch=False)
         self.employee_templates_tree.column("mode", width=120, minwidth=100, stretch=False)
-        self.employee_templates_tree.column("file", width=420, minwidth=220, stretch=True)
-        self.employee_templates_tree.column("sheet", width=120, minwidth=80, stretch=False)
+        self.employee_templates_tree.column("entries", width=100, minwidth=80, stretch=False)
         emp_vsb = ttk.Scrollbar(template_table, orient="vertical", command=self.employee_templates_tree.yview)
         self.employee_templates_tree.configure(yscrollcommand=emp_vsb.set)
         self.employee_templates_tree.grid(row=0, column=0, sticky="nsew")
         emp_vsb.grid(row=0, column=1, sticky="ns")
         template_table.grid_rowconfigure(0, weight=1)
         template_table.grid_columnconfigure(0, weight=1)
+        self._bind_employee_template_tree_resize(self.employee_templates_tree)
 
         export_box = tk.LabelFrame(self.root, text="Export", padx=10, pady=10)
         export_box.pack(fill="x", padx=10, pady=(0, 10))
@@ -437,6 +436,13 @@ class TreeSolutionHelperUI:
             name_label = str(t.get("name", ""))
             if bool(t.get("readonly", False)):
                 name_label = f"{name_label} [auto]"
+            entries_count = 0
+            internal_rows = t.get("internal_rows", [])
+            internal_ids = t.get("internal_ids", [])
+            if isinstance(internal_rows, list) and internal_rows:
+                entries_count = len(internal_rows)
+            elif isinstance(internal_ids, list):
+                entries_count = len(internal_ids)
             tree.insert(
                 "",
                 "end",
@@ -444,8 +450,7 @@ class TreeSolutionHelperUI:
                 values=(
                     name_label,
                     mode_label,
-                    str(t.get("file", "")),
-                    str(t.get("sheet", "")),
+                    str(entries_count),
                 ),
             )
 
@@ -733,6 +738,26 @@ class TreeSolutionHelperUI:
         tree.bind("<Control-A>", _select_all)
         tree.bind("<Control-c>", _copy)
         tree.bind("<Control-C>", _copy)
+
+    @staticmethod
+    def _bind_employee_template_tree_resize(tree: ttk.Treeview) -> None:
+        fixed_mode_width = 130
+        fixed_entries_width = 90
+        min_name_width = 240
+        max_name_width = 520
+        scrollbar_reserve = 28
+
+        def _resize(_event=None) -> None:
+            total_width = tree.winfo_width()
+            if total_width <= 1:
+                return
+            available = total_width - fixed_mode_width - fixed_entries_width - scrollbar_reserve
+            name_width = max(min_name_width, min(max_name_width, available))
+            tree.column("name", width=name_width, stretch=False)
+            tree.column("mode", width=fixed_mode_width, stretch=False)
+            tree.column("entries", width=fixed_entries_width, stretch=False)
+
+        tree.bind("<Configure>", _resize)
 
     def _open_contains_filter_dialog(
         self,

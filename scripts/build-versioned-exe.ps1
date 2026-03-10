@@ -28,6 +28,7 @@ try {
     }
     $dstExe = Join-Path $repoRoot "dist\TreeSolutionHelper (V$nextVersion).exe"
     Copy-Item -Path $srcExe -Destination $dstExe -Force
+    Remove-Item -Path $srcExe -Force
     Write-Host "Version aktualisiert: $current -> $nextVersion"
     Write-Host "Erstellt: $dstExe"
 }
