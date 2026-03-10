@@ -34,15 +34,27 @@ jobs:
         run: |
           pyinstaller TreeSolutionHelper.spec
 
+      - name: Create versioned EXE filename
+        shell: powershell
+        run: |
+          $version = (Get-Content VERSION.txt -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+$') {
+            throw "Invalid VERSION.txt format: $version"
+          }
+          $versionedName = "TreeSolutionHelper (V$version).exe"
+          Copy-Item dist\TreeSolutionHelper.exe "dist\$versionedName" -Force
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VERSIONED_EXE=dist\$versionedName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TreeSolutionHelper-windows
-          path: dist/TreeSolutionHelper.exe
+          name: TreeSolutionHelper-windows-v${{ env.APP_VERSION }}
+          path: ${{ env.VERSIONED_EXE }}
           if-no-files-found: error
 
       - name: Upload EXE to GitHub Release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/TreeSolutionHelper.exe
+          files: ${{ env.VERSIONED_EXE }}

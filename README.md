@@ -211,6 +211,31 @@ Das Build-Ergebnis liegt danach unter:
 dist/TreeSolutionHelper.exe
 ```
 
+## Versionsverwaltung der EXE
+
+Die fortlaufende EXE-Version wird zentral in [VERSION.txt](/C:/workarea/workspace/TreeSolutionAPI/VERSION.txt) gepflegt.
+Der aktuelle Ausgangsstand ist `5.2`.
+
+Fuer lokale versionierte Builds gibt es das Skript:
+
+```powershell
+.\scripts\build-versioned-exe.ps1
+```
+
+Verhalten des Skripts:
+
+- liest die aktuelle Version aus `VERSION.txt`
+- erhoeht die Minor-Version automatisch um `1`
+- baut die EXE
+- erzeugt zusaetzlich eine versionierte Datei wie `TreeSolutionHelper (V5.3).exe`
+- schreibt die neue Version zurueck nach `VERSION.txt`
+
+Beispiel:
+
+- vor dem Build: `5.2`
+- nach dem Build: `5.3`
+- erzeugte Datei: `dist/TreeSolutionHelper (V5.3).exe`
+
 ## GitHub Releases
 
 Das Repository ist so vorbereitet, dass GitHub Actions die aktuelle `TreeSolutionHelper.exe` automatisch baut.
@@ -234,6 +259,12 @@ Empfohlener Release-Ablauf:
 2. auf GitHub ein neues Release erstellen und veroeffentlichen
 3. GitHub Actions baut automatisch die aktuelle EXE
 4. die fertige `TreeSolutionHelper.exe` steht danach im Release als Asset bereit
+
+Wichtig:
+
+- du musst die EXE bei diesem Ablauf nicht selbst auf GitHub hochladen
+- du musst nur den Code pushen und das GitHub Release veroeffentlichen
+- das Hochladen der EXE uebernimmt GitHub Actions
 
 ## Aktueller Repository-Ansatz
 

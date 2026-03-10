@@ -958,11 +958,16 @@ class TreeSolutionHelperUI:
     def _ensure_original_users_loaded(self) -> pd.DataFrame:
         if self.state.original_df is None:
             self._sync_state_paths()
+            users_file = str(self.state.users_file or "").strip()
+            if not users_file or not Path(users_file).exists():
+                raise RuntimeError(
+                    "Eine Vorlage kann erst erstellt oder angewendet werden, nachdem eine Benutzerdatei geladen wurde."
+                )
             self.state.load_users()
             self._log(f"Benutzer automatisch geladen: {len(self.state.current_df)} aus {self.state.users_file}")
             self._refresh_technical_flags_from_keywords()
         if self.state.original_df is None:
-            raise RuntimeError("Zuerst Benutzerdatei laden.")
+            raise RuntimeError("Eine Vorlage kann erst erstellt oder angewendet werden, nachdem eine Benutzerdatei geladen wurde.")
         return self.state.original_df
 
     def _evaluate_employee_template(
