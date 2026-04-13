@@ -678,9 +678,11 @@ class TreeSolutionHelperUI:
         self._save_ui_state()
 
     def _build_internal_template_data(self, file_path: str, sheet: str | None) -> tuple[list[str], list[dict], int]:
-        df_base = self._ensure_original_users_loaded()
+        df_base, _keywords = self._get_marked_technical_df()
         if COL_ID not in df_base.columns:
             raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der Benutzerdatei.")
+        if "flag_technical_account" in df_base.columns:
+            df_base = df_base[df_base["flag_technical_account"] != True].copy()
         df_list = load_table(file_path, sheet or None)
         flag_name = "__template_build_match"
         marked_df, _stats = mark_by_employee_list(df_base, df_list, flag_name=flag_name, return_stats=True)
@@ -700,6 +702,7 @@ class TreeSolutionHelperUI:
         return internal_ids, internal_rows, len(matched_df)
 
     def open_employee_template_dialog(self) -> None:
+        self._ensure_original_users_loaded()
         selected_indices = self._get_selected_template_indices()
         selected_idx = selected_indices[0] if len(selected_indices) == 1 else None
         if selected_idx is not None and bool(self.employee_list_templates[selected_idx].get("readonly", False)):
