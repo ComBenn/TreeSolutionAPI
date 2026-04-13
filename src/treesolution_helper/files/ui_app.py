@@ -1208,6 +1208,27 @@ class TreeSolutionHelperUI:
         self._save_ui_state()
         mode_label = "einschliessen" if mode == "include" else "ausschliessen"
         self._log(f"Vorlage '{self.employee_list_templates[idx]['name']}' auf '{mode_label}' gesetzt.")
+        self._reapply_all_employee_templates()
+
+    def _reapply_all_employee_templates(self) -> None:
+        df_base = self._ensure_original_users_loaded()
+        all_indices = list(range(len(self.employee_list_templates)))
+        if not all_indices:
+            self.state.current_df = df_base.copy()
+            self.preview_current()
+            return
+        selected_df, include_count, exclude_count = self._apply_employee_templates(
+            df_base,
+            all_indices,
+            label="Alle Vorlagen",
+        )
+        self.state.current_df = selected_df
+        self._log(
+            f"Aktuelle Auswahl nach Modusänderung aktualisiert. "
+            f"Vorlagen: {len(all_indices)} | Einschliessen: {include_count} | Ausschliessen: {exclude_count} | "
+            f"Verbleibend: {len(selected_df)}"
+        )
+        self.preview_current()
 
     def toggle_selected_template_mode(self) -> None:
         def _run() -> None:
