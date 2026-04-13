@@ -203,6 +203,7 @@ class TreeSolutionHelperUI:
         template_table.grid_rowconfigure(0, weight=1)
         template_table.grid_columnconfigure(0, weight=1)
         self._bind_employee_template_tree_resize(self.employee_templates_tree)
+        self._bind_employee_template_context_menu(self.employee_templates_tree)
 
         export_box = tk.LabelFrame(self.root, text="Export", padx=10, pady=10)
         export_box.pack(fill="x", padx=10, pady=(0, 10))
@@ -396,6 +397,23 @@ class TreeSolutionHelperUI:
             if str(t.get("name", "")).strip().casefold() == name_cf:
                 return i
         return None
+
+    def _bind_employee_template_context_menu(self, tree: ttk.Treeview) -> None:
+        menu = tk.Menu(tree, tearoff=0)
+        menu.add_command(label="Modus umschalten", command=lambda: self._with_errors(self.toggle_selected_template_mode))
+
+        def _show_menu(event) -> None:
+            row_id = tree.identify_row(event.y)
+            if not row_id:
+                return
+            current_selection = tree.selection()
+            if row_id not in current_selection:
+                tree.selection_set(row_id)
+            tree.focus(row_id)
+            menu.tk_popup(event.x_root, event.y_root)
+            menu.grab_release()
+
+        tree.bind("<Button-3>", _show_menu)
 
     def _build_internal_technical_template_data(
         self,
@@ -1724,12 +1742,6 @@ class TreeSolutionHelperUI:
             row=1,
             on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy())),
         )
-        tk.Button(
-            export_controls,
-            text="Exportieren",
-            command=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy(), initialfile="Upload.csv")),
-            width=28,
-        ).grid(row=0, column=3, padx=4, pady=4, sticky="w")
 
         table_toolbar = tk.Frame(container)
         table_toolbar.pack(fill="x", pady=(0, 8))
@@ -1909,6 +1921,12 @@ class TreeSolutionHelperUI:
 
         footer = tk.Frame(container)
         footer.pack(fill="x", pady=(8, 0))
+        tk.Button(
+            footer,
+            text="Exportieren",
+            command=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy(), initialfile="Upload.csv")),
+            width=16,
+        ).pack(side="right", padx=(6, 0))
         tk.Button(footer, text="Abbrechen", command=_restore_output_field_on_close, width=16).pack(side="right")
 
         win.protocol("WM_DELETE_WINDOW", _restore_output_field_on_close)
@@ -2136,16 +2154,11 @@ class TreeSolutionHelperUI:
 
         footer = tk.Frame(container)
         footer.pack(fill="x", pady=(8, 0))
+        tk.Button(footer, text="Batch exportieren", command=run_batch_export, width=16).pack(side="right", padx=(6, 0))
         tk.Button(footer, text="Abbrechen", command=_restore_output_field_on_close, width=16).pack(side="right")
 
         win.protocol("WM_DELETE_WINDOW", _restore_output_field_on_close)
 
-        tk.Button(
-            controls,
-            text="Batch exportieren",
-            command=run_batch_export,
-            width=36,
-        ).grid(row=0, column=3, padx=4, pady=4, sticky="w")
         tk.Button(
             controls,
             text="Anzeige aktualisieren",
