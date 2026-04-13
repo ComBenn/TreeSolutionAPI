@@ -1,7 +1,7 @@
 # TreeSolutionHelper
 
 TreeSolutionHelper ist ein Windows-GUI-Tool zur Aufbereitung von Benutzerexporten fuer den Upload in Zielsysteme.
-Das Programm laedt Benutzerdaten aus Excel oder CSV, markiert technische Accounts, verarbeitet Mitarbeiterlisten,
+Das Programm laedt Benutzerdaten aus Excel oder CSV, markiert technische Accounts und Duplikate, verarbeitet Mitarbeiterlisten,
 zeigt die aktuelle Auswahl in einer Filter-/Sortieransicht an und erzeugt daraus Upload-CSV-Dateien.
 
 Der normale Einsatz ist die Weitergabe der erzeugten `TreeSolutionHelper.exe`.
@@ -11,6 +11,7 @@ Der Python-Quellstand dient dem Build und der Wartung.
 
 - Benutzerdatei aus Excel oder CSV laden
 - Technische Accounts ueber Keyword-Datei markieren und ausschliessen
+- Duplikate ueber Email, Username oder Nachname/Vorname pruefen und gezielt ausschliessen
 - Mitarbeiterlisten als wiederverwendbare Vorlagen speichern
 - Aktuelle Auswahl interaktiv filtern, sortieren und pruefen
 - Upload-CSV fuer die aktuelle Auswahl exportieren

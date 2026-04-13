@@ -12,12 +12,17 @@ import pandas as pd
 
 from config import (
     COL_ID,
+    COL_EMAIL,
+    COL_FIRSTNAME,
+    COL_LASTNAME,
+    COL_USERNAME,
     DEFAULT_USERS_FILE,
     DEFAULT_USERS_SHEET,
     DEFAULT_KEYWORDS_FILE,
     DEFAULT_OUTPUT_FILE,
 )
 from io_utils import load_table, load_keywords_txt
+from filters_duplicates import mark_duplicate_accounts
 from filters_technical import mark_technical_accounts
 from filters_employee_list import mark_by_employee_list
 from exporter import build_upload_export, export_utf8_csv
@@ -119,11 +124,14 @@ class TreeSolutionHelperUI:
         self.employee_list_templates: list[dict] = []
         self.employee_templates_tree: ttk.Treeview | None = None
         self.technical_template_name = "Technische Accounts (Auto)"
+        self.duplicate_template_name = "Duplikate ausgeschlossen (Auto)"
+        self.duplicate_excluded_ids: set[str] = set()
 
         self._build_ui()
         self._refresh_status()
         self._load_ui_state()
         self._ensure_technical_template_present()
+        self._ensure_duplicate_template_present()
         self._refresh_employee_templates_view()
         self.root.after(100, self._auto_load_last_users_file)
 
@@ -144,6 +152,10 @@ class TreeSolutionHelperUI:
         technical = tk.LabelFrame(self.root, text="Technische Accounts", padx=10, pady=10)
         technical.pack(fill="x", padx=10, pady=(0, 10))
         tk.Button(technical, text="Keyword-Datei öffnen", command=self.show_keywords, width=22).grid(row=0, column=0, padx=4, pady=4, sticky="w")
+
+        duplicates = tk.LabelFrame(self.root, text="Duplikate", padx=10, pady=10)
+        duplicates.pack(fill="x", padx=10, pady=(0, 10))
+        tk.Button(duplicates, text="Duplikate prüfen", command=self.review_duplicates, width=22).grid(row=0, column=0, padx=4, pady=4, sticky="w")
 
         employee = tk.LabelFrame(self.root, text="Mitarbeiterliste", padx=10, pady=10)
         employee.pack(fill="x", padx=10, pady=(0, 10))
@@ -285,6 +297,7 @@ class TreeSolutionHelperUI:
         employee_list_sheet = str(payload.get("employee_list_sheet", "")).strip()
         employee_template_name = str(payload.get("employee_template_name", "")).strip()
         templates_raw = payload.get("employee_list_templates", [])
+        duplicate_excluded_ids_raw = payload.get("duplicate_excluded_ids", [])
 
         if users_file:
             self.users_file_var.set(users_file)
@@ -301,8 +314,14 @@ class TreeSolutionHelperUI:
         if employee_template_name:
             self.employee_template_name_var.set(employee_template_name)
         self.export_department_override_var.set(export_department)
+        self.duplicate_excluded_ids = {
+            str(x).strip()
+            for x in duplicate_excluded_ids_raw
+            if str(x).strip()
+        }
         self.employee_list_templates = self._sanitize_employee_templates(templates_raw)
         self._ensure_technical_template_present()
+        self._ensure_duplicate_template_present()
         self._refresh_employee_templates_view()
         self._sync_state_paths()
 
@@ -317,6 +336,7 @@ class TreeSolutionHelperUI:
             "employee_list_file": self.employee_list_file_var.get().strip(),
             "employee_list_sheet": self.employee_list_sheet_var.get().strip(),
             "employee_template_name": self.employee_template_name_var.get().strip(),
+            "duplicate_excluded_ids": sorted(self.duplicate_excluded_ids),
             "employee_list_templates": self.employee_list_templates,
         }
         try:
@@ -344,7 +364,7 @@ class TreeSolutionHelperUI:
                 continue
             if mode not in ("include", "exclude"):
                 mode = "include"
-            if kind not in ("employee", "technical"):
+            if kind not in ("employee", "technical", "duplicate"):
                 kind = "employee"
             internal_ids_raw = item.get("internal_ids", [])
             internal_rows_raw = item.get("internal_rows", [])
@@ -422,6 +442,53 @@ class TreeSolutionHelperUI:
         if idx is None:
             self.employee_list_templates.insert(0, payload)
             self._log(f"Auto-Vorlage bereitgestellt: {self.technical_template_name} | Treffer: {hits}")
+        else:
+            existing = self.employee_list_templates[idx]
+            existing.update(payload)
+
+    def _build_internal_duplicate_template_data(
+        self,
+        marked_df: pd.DataFrame | None = None,
+    ) -> tuple[list[str], list[dict], int]:
+        if self.state.original_df is None and marked_df is None:
+            return [], [], 0
+        if marked_df is None:
+            marked_df = self._get_marked_duplicate_df()
+        if COL_ID not in marked_df.columns:
+            return [], [], 0
+        matched_df = marked_df[
+            marked_df[COL_ID].fillna("").astype(str).str.strip().isin(self.duplicate_excluded_ids)
+        ].copy()
+        if matched_df.empty:
+            return [], [], 0
+        matched_df = matched_df.fillna("").astype(str)
+        ids = sorted(
+            {
+                str(v).strip()
+                for v in matched_df[COL_ID].fillna("").astype(str)
+                if str(v).strip()
+            }
+        )
+        rows = matched_df.to_dict(orient="records")
+        return ids, rows, len(matched_df)
+
+    def _ensure_duplicate_template_present(self, marked_df: pd.DataFrame | None = None) -> None:
+        ids, rows, hits = self._build_internal_duplicate_template_data(marked_df=marked_df)
+        idx = self._find_template_index_by_name(self.duplicate_template_name)
+        payload = {
+            "name": self.duplicate_template_name,
+            "file": "<auto:duplicate_review>",
+            "sheet": "",
+            "mode": "exclude",
+            "kind": "duplicate",
+            "readonly": True,
+            "internal_ids": ids,
+            "internal_rows": rows,
+        }
+        if idx is None:
+            insert_at = 1 if self._find_template_index_by_name(self.technical_template_name) is not None else 0
+            self.employee_list_templates.insert(insert_at, payload)
+            self._log(f"Auto-Vorlage bereitgestellt: {self.duplicate_template_name} | Treffer: {hits}")
         else:
             existing = self.employee_list_templates[idx]
             existing.update(payload)
@@ -926,13 +993,28 @@ class TreeSolutionHelperUI:
         marked_df = mark_technical_accounts(self.state.original_df, keywords)
         return marked_df, keywords
 
-    def _refresh_technical_flags_from_keywords(self) -> int:
-        marked_df, keywords = self._get_marked_technical_df()
+    def _get_marked_duplicate_df(self) -> pd.DataFrame:
+        if self.state.original_df is None:
+            raise RuntimeError("Zuerst Benutzerdatei laden.")
+        return mark_duplicate_accounts(self.state.original_df)
+
+    def _refresh_auto_flags(self) -> tuple[int, int]:
+        technical_df, keywords = self._get_marked_technical_df()
+        marked_df = mark_duplicate_accounts(technical_df)
         self.state.current_df = marked_df
-        hits = int(marked_df["flag_technical_account"].sum())
+        technical_hits = int(marked_df["flag_technical_account"].sum()) if "flag_technical_account" in marked_df.columns else 0
+        duplicate_hits = int(marked_df["flag_duplicate"].sum()) if "flag_duplicate" in marked_df.columns else 0
         self._ensure_technical_template_present(marked_df=marked_df)
+        self._ensure_duplicate_template_present(marked_df=marked_df)
         self._refresh_employee_templates_view()
-        self._log(f"Technische Markierung aktualisiert. Keywords: {len(keywords)} | Treffer: {hits}")
+        self._log(
+            f"Auto-Markierungen aktualisiert. Keywords: {len(keywords)} | "
+            f"Technische Treffer: {technical_hits} | Duplikat-Treffer: {duplicate_hits}"
+        )
+        return technical_hits, duplicate_hits
+
+    def _refresh_technical_flags_from_keywords(self) -> int:
+        hits, _duplicate_hits = self._refresh_auto_flags()
         return hits
 
     def _pick_users_file(self) -> None:
@@ -1019,7 +1101,7 @@ class TreeSolutionHelperUI:
                 raise RuntimeError("Bitte zuerst eine oder mehrere Vorlagen auswählen.")
             readonly_selected = [i for i in selected_indices if bool(self.employee_list_templates[i].get("readonly", False))]
             if readonly_selected:
-                raise RuntimeError("Die automatische technische Vorlage kann nicht entfernt werden.")
+                raise RuntimeError("Automatische Vorlagen können nicht entfernt werden.")
             names = [str(self.employee_list_templates[i].get("name", "")) for i in selected_indices]
             for idx in sorted(selected_indices, reverse=True):
                 del self.employee_list_templates[idx]
@@ -1046,7 +1128,7 @@ class TreeSolutionHelperUI:
             if idx is None:
                 raise RuntimeError("Bitte zuerst eine Vorlage auswählen.")
             if bool(self.employee_list_templates[idx].get("readonly", False)):
-                raise RuntimeError("Der Modus der automatischen technischen Vorlage ist fix auf 'ausschliessen'.")
+                raise RuntimeError("Der Modus automatischer Vorlagen ist fix auf 'ausschliessen'.")
             current_mode = str(self.employee_list_templates[idx].get("mode", "include")).strip().casefold()
             next_mode = "exclude" if current_mode == "include" else "include"
             self._set_selected_template_mode(next_mode)
@@ -1086,8 +1168,11 @@ class TreeSolutionHelperUI:
 
             # Migration/Fallback: ältere Vorlagen ohne interne Liste neu aufbauen.
             if not ids_in_template:
-                if str(template.get("kind", "employee")) == "technical":
+                template_kind = str(template.get("kind", "employee"))
+                if template_kind == "technical":
                     rebuilt_ids, rebuilt_rows, _hits = self._build_internal_technical_template_data()
+                elif template_kind == "duplicate":
+                    rebuilt_ids, rebuilt_rows, _hits = self._build_internal_duplicate_template_data()
                 else:
                     file_path = str(template.get("file", "")).strip()
                     sheet = str(template.get("sheet", "")).strip()
@@ -1157,13 +1242,25 @@ class TreeSolutionHelperUI:
                     if str(v).strip()
                 }
                 if not ids_in_template:
-                    file_path = str(template.get("file", "")).strip()
-                    sheet = str(template.get("sheet", "")).strip()
-                    if file_path:
-                        rebuilt_ids, rebuilt_rows, _hits = self._build_internal_template_data(file_path, sheet)
+                    template_kind = str(template.get("kind", "employee"))
+                    if template_kind == "technical":
+                        rebuilt_ids, rebuilt_rows, _hits = self._build_internal_technical_template_data()
                         ids_in_template = set(rebuilt_ids)
                         template["internal_ids"] = rebuilt_ids
                         template["internal_rows"] = rebuilt_rows
+                    elif template_kind == "duplicate":
+                        rebuilt_ids, rebuilt_rows, _hits = self._build_internal_duplicate_template_data()
+                        ids_in_template = set(rebuilt_ids)
+                        template["internal_ids"] = rebuilt_ids
+                        template["internal_rows"] = rebuilt_rows
+                    else:
+                        file_path = str(template.get("file", "")).strip()
+                        sheet = str(template.get("sheet", "")).strip()
+                        if file_path:
+                            rebuilt_ids, rebuilt_rows, _hits = self._build_internal_template_data(file_path, sheet)
+                            ids_in_template = set(rebuilt_ids)
+                            template["internal_ids"] = rebuilt_ids
+                            template["internal_rows"] = rebuilt_rows
                 selected_ids.update(ids_in_template)
 
             id_series = df_base[COL_ID].fillna("").astype(str).str.strip()
@@ -1236,13 +1333,14 @@ class TreeSolutionHelperUI:
             self._sync_state_paths()
             self.state.load_users()
             self._log(f"Benutzer geladen: {len(self.state.current_df)} aus {self.state.users_file}")
-            self._refresh_technical_flags_from_keywords()
+            self._refresh_auto_flags()
             self.preview_current()
         self._with_errors(_run)
 
     def reset_users(self) -> None:
         def _run() -> None:
             self.state.reset()
+            self._refresh_auto_flags()
             self._log("Arbeitssatz auf Original zurückgesetzt.")
             self.preview_current()
         self._with_errors(_run)
@@ -1278,6 +1376,214 @@ class TreeSolutionHelperUI:
             self.state.current_df = df[df["flag_technical_account"] != True].copy()
             self._log(f"Technische Accounts ausgeschlossen. Verbleibend: {len(self.state.current_df)}")
             self.preview_current()
+        self._with_errors(_run)
+
+    def review_duplicates(self) -> None:
+        def _run() -> None:
+            marked_df = self._get_marked_duplicate_df()
+            if "flag_duplicate" not in marked_df.columns:
+                raise RuntimeError("Duplikate konnten nicht markiert werden.")
+
+            duplicate_df = marked_df[marked_df["flag_duplicate"] == True].copy()
+            if duplicate_df.empty:
+                messagebox.showinfo("Keine Duplikate", "Es wurden keine Duplikate gefunden.")
+                return
+            if COL_ID not in duplicate_df.columns:
+                raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der Benutzerdatei.")
+
+            duplicate_df[COL_ID] = duplicate_df[COL_ID].fillna("").astype(str).str.strip()
+            duplicate_df = duplicate_df.sort_values(
+                by=["flag_duplicate_group", COL_LASTNAME, COL_FIRSTNAME, COL_EMAIL, COL_USERNAME],
+                kind="stable",
+            )
+            group_ids = [g for g in duplicate_df["flag_duplicate_group"].dropna().astype(str).unique() if g.strip()]
+            if not group_ids:
+                messagebox.showinfo("Keine Duplikate", "Es wurden keine Dublettengruppen gefunden.")
+                return
+
+            win = tk.Toplevel(self.root)
+            win.title(f"Duplikate prüfen ({len(group_ids)} Gruppen)")
+            win.geometry("1320x760")
+            self._make_modal(win)
+
+            container = tk.Frame(win, padx=8, pady=8)
+            container.pack(fill="both", expand=True)
+
+            tk.Label(
+                container,
+                text=(
+                    "Checkbox aktiviert = Account wird ausgeschlossen. "
+                    "Pro Duplikat-Gruppe muss mindestens ein Eintrag aktiv bleiben."
+                ),
+                anchor="w",
+                justify="left",
+            ).pack(fill="x", pady=(0, 8))
+
+            columns = [
+                "__exclude",
+                "flag_duplicate_group",
+                COL_ID,
+                COL_USERNAME,
+                COL_EMAIL,
+                COL_FIRSTNAME,
+                COL_LASTNAME,
+                "flag_duplicate_reason",
+            ]
+            labels = {
+                "__exclude": "Ausschließen",
+                "flag_duplicate_group": "Gruppe",
+                COL_ID: "id",
+                COL_USERNAME: "username",
+                COL_EMAIL: "email",
+                COL_FIRSTNAME: "firstname",
+                COL_LASTNAME: "lastname",
+                "flag_duplicate_reason": "Grund",
+            }
+
+            table_frame = tk.Frame(container)
+            table_frame.pack(fill="both", expand=True)
+            tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+            vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+            hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
+            tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            tree.grid(row=0, column=0, sticky="nsew")
+            vsb.grid(row=0, column=1, sticky="ns")
+            hsb.grid(row=1, column=0, sticky="ew")
+            table_frame.grid_rowconfigure(0, weight=1)
+            table_frame.grid_columnconfigure(0, weight=1)
+
+            for col in columns:
+                tree.heading(col, text=labels.get(col, col))
+                width = 130
+                if col == "__exclude":
+                    width = 110
+                elif col == "flag_duplicate_reason":
+                    width = 240
+                tree.column(col, width=width, minwidth=90, stretch=True)
+
+            tree.tag_configure("odd", background="#f6f8fb")
+            tree.tag_configure("even", background="#ffffff")
+
+            row_state: dict[str, dict] = {}
+            for i, (_, row) in enumerate(duplicate_df.fillna("").astype(str).iterrows()):
+                row_id = str(row.get(COL_ID, "")).strip()
+                if not row_id:
+                    continue
+                excluded = row_id in self.duplicate_excluded_ids
+                iid = f"dup-{i}"
+                tree.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    values=[
+                        "☑" if excluded else "☐",
+                        row.get("flag_duplicate_group", ""),
+                        row_id,
+                        row.get(COL_USERNAME, ""),
+                        row.get(COL_EMAIL, ""),
+                        row.get(COL_FIRSTNAME, ""),
+                        row.get(COL_LASTNAME, ""),
+                        row.get("flag_duplicate_reason", ""),
+                    ],
+                    tags=("odd" if i % 2 else "even",),
+                )
+                row_state[iid] = {
+                    "id": row_id,
+                    "group": str(row.get("flag_duplicate_group", "")).strip(),
+                    "excluded": excluded,
+                }
+
+            def _refresh_row(iid: str) -> None:
+                state = row_state[iid]
+                current_values = list(tree.item(iid, "values"))
+                current_values[0] = "☑" if state["excluded"] else "☐"
+                tree.item(iid, values=current_values)
+
+            def _toggle_selected_row(event=None) -> None:
+                current_iid = tree.focus()
+                if event is not None and not current_iid:
+                    current_iid = tree.identify_row(event.y)
+                if not current_iid or current_iid not in row_state:
+                    return
+                row_state[current_iid]["excluded"] = not bool(row_state[current_iid]["excluded"])
+                _refresh_row(current_iid)
+
+            def _toggle_checkbox_click(event) -> None:
+                iid = tree.identify_row(event.y)
+                col = tree.identify_column(event.x)
+                if iid and col == "#1":
+                    tree.focus(iid)
+                    tree.selection_set(iid)
+                    _toggle_selected_row()
+
+            tree.bind("<Button-1>", _toggle_checkbox_click, add="+")
+            tree.bind("<Double-1>", _toggle_selected_row)
+            tree.bind("<space>", _toggle_selected_row)
+
+            footer = tk.Frame(container)
+            footer.pack(fill="x", pady=(8, 0))
+
+            def _validate_selection() -> None:
+                active_per_group: dict[str, int] = {}
+                for state in row_state.values():
+                    group = str(state["group"]).strip()
+                    if group and not bool(state["excluded"]):
+                        active_per_group[group] = active_per_group.get(group, 0) + 1
+                invalid_groups = [group for group in group_ids if active_per_group.get(group, 0) == 0]
+                if invalid_groups:
+                    raise RuntimeError(
+                        "Mindestens ein Account pro Gruppe muss aktiv bleiben. "
+                        f"Ungültige Gruppen: {', '.join(invalid_groups[:10])}"
+                    )
+
+            def _exclude_all_but_first() -> None:
+                for group in group_ids:
+                    group_iids = [iid for iid, state in row_state.items() if state["group"] == group]
+                    group_iids.sort(key=lambda iid: tuple(str(v) for v in tree.item(iid, "values")[2:6]))
+                    for pos, iid in enumerate(group_iids):
+                        row_state[iid]["excluded"] = pos > 0
+                        _refresh_row(iid)
+
+            def _save_selection() -> None:
+                _validate_selection()
+                self.duplicate_excluded_ids = {
+                    state["id"]
+                    for state in row_state.values()
+                    if bool(state["excluded"]) and str(state["id"]).strip()
+                }
+                self._ensure_duplicate_template_present(marked_df=marked_df)
+                self._save_ui_state()
+                self._refresh_employee_templates_view()
+
+                df_base = self._ensure_original_users_loaded()
+                all_indices = list(range(len(self.employee_list_templates)))
+                selected_df, include_count, exclude_count = self._apply_employee_templates(
+                    df_base,
+                    all_indices,
+                    label="Alle Vorlagen",
+                )
+                self.state.current_df = selected_df
+                self._log(
+                    f"Duplikat-Entscheidungen gespeichert. Gruppen: {len(group_ids)} | "
+                    f"Ausgeschlossene IDs: {len(self.duplicate_excluded_ids)} | "
+                    f"Vorlagen aktiv: {len(all_indices)} | Einschliessen: {include_count} | Ausschliessen: {exclude_count}"
+                )
+                self.preview_current()
+                win.destroy()
+
+            tk.Button(
+                footer,
+                text="Alle außer erster ausschließen",
+                command=lambda: self._with_errors(_exclude_all_but_first),
+                width=28,
+            ).pack(side="left")
+            tk.Button(
+                footer,
+                text="Speichern",
+                command=lambda: self._with_errors(_save_selection),
+                width=14,
+            ).pack(side="right", padx=(6, 0))
+            tk.Button(footer, text="Abbrechen", command=win.destroy, width=14).pack(side="right")
         self._with_errors(_run)
 
     def mark_employee_list(self) -> None:
