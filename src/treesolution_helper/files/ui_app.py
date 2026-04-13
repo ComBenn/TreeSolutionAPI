@@ -328,6 +328,10 @@ class TreeSolutionHelperUI:
         values = [var.get().strip() for var in self.export_department_override_vars if var.get().strip()]
         return values
 
+    def _reset_export_department_override_fields(self) -> None:
+        first_value = self.export_department_override_vars[0].get().strip() if self.export_department_override_vars else ""
+        self._set_export_department_override_values([first_value])
+
     def _load_ui_state(self) -> None:
         p = self.state.ui_state_file
         if not p.exists():
@@ -1979,7 +1983,9 @@ class TreeSolutionHelperUI:
         refresh_selection_table()
 
         def _restore_output_field_on_close() -> None:
+            self._reset_export_department_override_fields()
             self.output_file_var.set(previous_output_csv)
+            self._save_ui_state()
             win.destroy()
 
         footer = tk.Frame(container)
@@ -2212,7 +2218,9 @@ class TreeSolutionHelperUI:
 
         def _restore_output_field_on_close() -> None:
             # Restore the main UI field value after closing the batch window.
+            self._reset_export_department_override_fields()
             self.output_file_var.set(previous_output_csv)
+            self._save_ui_state()
             win.destroy()
 
         footer = tk.Frame(container)
