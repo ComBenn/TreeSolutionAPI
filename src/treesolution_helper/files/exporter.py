@@ -21,7 +21,11 @@ def _is_technical_export_column(col_name: str) -> bool:
     return name.startswith("flag_") or name.startswith("__")
 
 
-def build_upload_export(df: pd.DataFrame, department_override: str | None = None) -> pd.DataFrame:
+def build_upload_export(
+    df: pd.DataFrame,
+    department_override: str | None = None,
+    department_overrides: list[str] | None = None,
+) -> pd.DataFrame:
     """
     Erzeugt einen Export auf Basis der importierten Struktur:
     - fachliche Spalten bleiben erhalten (Reihenfolge bleibt erhalten)
@@ -44,11 +48,17 @@ def build_upload_export(df: pd.DataFrame, department_override: str | None = None
         out[COL_INSTITUTION] = ""
     out[COL_INSTITUTION] = EXPORT_INSTITUTION_VALUE
 
-    if COL_DEPARTMENT not in out.columns:
-        out[COL_DEPARTMENT] = ""
-    if department_override is not None and str(department_override).strip() != "":
-        out[COL_DEPARTMENT] = str(department_override).strip()
+    override_values = [str(v).strip() for v in (department_overrides or []) if str(v).strip()]
+    if not override_values and department_override is not None and str(department_override).strip() != "":
+        override_values = [str(department_override).strip()]
+
+    if override_values:
+        out = out.drop(columns=[COL_DEPARTMENT], errors="ignore")
+        for idx, value in enumerate(override_values, start=1):
+            out[f"{COL_DEPARTMENT}{idx}"] = value
     else:
+        if COL_DEPARTMENT not in out.columns:
+            out[COL_DEPARTMENT] = ""
         out[COL_DEPARTMENT] = out[COL_DEPARTMENT].fillna("").astype(str)
 
     if COL_AUTH not in out.columns:

@@ -116,6 +116,7 @@ class TreeSolutionHelperUI:
         self.keywords_file_var = tk.StringVar(value=self.state.keywords_file)
         self.output_file_var = tk.StringVar(value=self.state.output_file)
         self.export_department_override_var = tk.StringVar(value="")
+        self.export_department_override_vars: list[tk.StringVar] = [self.export_department_override_var]
         self.batch_export_count_var = tk.StringVar(value="250")
         self.employee_template_name_var = tk.StringVar(value="")
         self.employee_list_file_var = tk.StringVar(value="")
@@ -266,6 +267,42 @@ class TreeSolutionHelperUI:
             parent.grid_columnconfigure(1, weight=1)
         return entry
 
+    def _build_department_override_controls(
+        self,
+        parent: tk.Misc,
+        start_row: int,
+        on_enter=None,
+    ) -> None:
+        rows_container = tk.Frame(parent)
+        rows_container.grid(row=start_row, column=0, columnspan=3, sticky="we")
+        if hasattr(parent, "grid_columnconfigure"):
+            parent.grid_columnconfigure(1, weight=1)
+
+        def _render_rows() -> None:
+            for child in rows_container.winfo_children():
+                child.destroy()
+
+            for idx, var in enumerate(self.export_department_override_vars):
+                label = "Export department" if idx == 0 else ""
+                entry = self._build_entry_row(rows_container, label, var, row=idx)
+                if on_enter is not None:
+                    entry.bind("<Return>", lambda _e: on_enter())
+
+            button_row = len(self.export_department_override_vars)
+            tk.Label(rows_container, text="", width=16, anchor="w").grid(row=button_row, column=0, padx=4, pady=(0, 4), sticky="w")
+            tk.Button(
+                rows_container,
+                text="Weiteres Department",
+                command=lambda: self._with_errors(_add_department_row),
+                width=20,
+            ).grid(row=button_row, column=1, padx=4, pady=(0, 4), sticky="w")
+
+        def _add_department_row() -> None:
+            self.export_department_override_vars.append(tk.StringVar(value=""))
+            _render_rows()
+
+        _render_rows()
+
     def _log(self, text: str) -> None:
         self.log.insert(tk.END, text.rstrip() + "\n")
         self.log.see(tk.END)
@@ -279,6 +316,17 @@ class TreeSolutionHelperUI:
         self.state.users_sheet = self.users_sheet_var.get().strip() or None
         self.state.keywords_file = self.keywords_file_var.get().strip()
         self.state.output_file = self.output_file_var.get().strip()
+
+    def _set_export_department_override_values(self, values: list[str]) -> None:
+        normalized = [str(v).strip() for v in values]
+        if not normalized:
+            normalized = [""]
+        self.export_department_override_vars = [tk.StringVar(value=value) for value in normalized]
+        self.export_department_override_var = self.export_department_override_vars[0]
+
+    def _get_export_department_override_values(self) -> list[str]:
+        values = [var.get().strip() for var in self.export_department_override_vars if var.get().strip()]
+        return values
 
     def _load_ui_state(self) -> None:
         p = self.state.ui_state_file
@@ -294,6 +342,7 @@ class TreeSolutionHelperUI:
         keywords_file = str(payload.get("keywords_file", "")).strip()
         output_file = str(payload.get("output_file", "")).strip()
         export_department = str(payload.get("export_department_override", "")).strip()
+        export_departments_raw = payload.get("export_department_overrides", [])
         employee_list_file = str(payload.get("employee_list_file", "")).strip()
         employee_list_sheet = str(payload.get("employee_list_sheet", "")).strip()
         employee_template_name = str(payload.get("employee_template_name", "")).strip()
@@ -314,7 +363,14 @@ class TreeSolutionHelperUI:
             self.employee_list_sheet_var.set(employee_list_sheet)
         if employee_template_name:
             self.employee_template_name_var.set(employee_template_name)
-        self.export_department_override_var.set(export_department)
+        export_departments = []
+        if isinstance(export_departments_raw, list):
+            export_departments = [str(x).strip() for x in export_departments_raw if str(x).strip()]
+        elif export_department:
+            export_departments = [export_department]
+        if not export_departments:
+            export_departments = [""]
+        self._set_export_department_override_values(export_departments)
         self.duplicate_excluded_ids = {
             str(x).strip()
             for x in duplicate_excluded_ids_raw
@@ -334,6 +390,7 @@ class TreeSolutionHelperUI:
             "keywords_file": self.keywords_file_var.get().strip(),
             "output_file": self.output_file_var.get().strip(),
             "export_department_override": self.export_department_override_var.get().strip(),
+            "export_department_overrides": self._get_export_department_override_values(),
             "employee_list_file": self.employee_list_file_var.get().strip(),
             "employee_list_sheet": self.employee_list_sheet_var.get().strip(),
             "employee_template_name": self.employee_template_name_var.get().strip(),
@@ -915,14 +972,19 @@ class TreeSolutionHelperUI:
 
     def _build_export_df_from_source(self, df_source: pd.DataFrame) -> pd.DataFrame:
         department_override = self.export_department_override_var.get().strip()
-        return build_upload_export(df_source, department_override=department_override or None)
+        department_overrides = self._get_export_department_override_values()
+        return build_upload_export(
+            df_source,
+            department_override=department_override or None,
+            department_overrides=department_overrides or None,
+        )
 
     def _log_export_result(self, rows: int) -> None:
-        department_override = self.export_department_override_var.get().strip()
-        if department_override:
+        department_overrides = self._get_export_department_override_values()
+        if department_overrides:
             self._log(
                 f"Export geschrieben: {self.state.output_file} | Zeilen: {rows} | "
-                f"Department Override: {department_override}"
+                f"Departments: {', '.join(department_overrides)}"
             )
         else:
             self._log(f"Export geschrieben: {self.state.output_file} | Zeilen: {rows}")
@@ -1735,11 +1797,9 @@ class TreeSolutionHelperUI:
             row=0,
             on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy(), initialfile="Upload.csv")),
         )
-        self._build_entry_row(
+        self._build_department_override_controls(
             export_controls,
-            "Export department",
-            self.export_department_override_var,
-            row=1,
+            start_row=1,
             on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy())),
         )
 
@@ -1987,15 +2047,15 @@ class TreeSolutionHelperUI:
         controls = tk.LabelFrame(container, text="Batch-Export", padx=8, pady=8)
         controls.pack(fill="x", pady=(0, 8))
         self._build_entry_row(controls, "Output CSV", self.output_file_var, row=0)
-        self._build_entry_row(controls, "Export department", self.export_department_override_var, row=1)
-        self._build_entry_row(controls, "Batch-Grösse", batch_size_var, row=2)
+        self._build_department_override_controls(controls, start_row=1, on_enter=lambda: self._with_errors(refresh_view))
+        self._build_entry_row(controls, "Batch-Grösse", batch_size_var, row=3)
 
         stats_var = tk.StringVar(value="")
         details_var = tk.StringVar(value="")
         tracker_var = tk.StringVar(value="")
-        tk.Label(controls, textvariable=stats_var, anchor="w").grid(row=3, column=0, columnspan=3, padx=4, pady=(8, 2), sticky="w")
-        tk.Label(controls, textvariable=details_var, anchor="w").grid(row=4, column=0, columnspan=3, padx=4, pady=2, sticky="w")
-        tk.Label(controls, textvariable=tracker_var, anchor="w").grid(row=5, column=0, columnspan=3, padx=4, pady=2, sticky="w")
+        tk.Label(controls, textvariable=stats_var, anchor="w").grid(row=4, column=0, columnspan=3, padx=4, pady=(8, 2), sticky="w")
+        tk.Label(controls, textvariable=details_var, anchor="w").grid(row=5, column=0, columnspan=3, padx=4, pady=2, sticky="w")
+        tk.Label(controls, textvariable=tracker_var, anchor="w").grid(row=6, column=0, columnspan=3, padx=4, pady=2, sticky="w")
 
         table_toolbar = tk.Frame(container)
         table_toolbar.pack(fill="x", pady=(0, 8))
@@ -2164,7 +2224,7 @@ class TreeSolutionHelperUI:
             text="Anzeige aktualisieren",
             command=lambda: self._with_errors(refresh_view),
             width=36,
-        ).grid(row=1, column=3, padx=4, pady=4, sticky="w")
+        ).grid(row=3, column=3, padx=4, pady=4, sticky="w")
 
         # Enter in batch fields refreshes the proposed batch preview.
         for child in controls.winfo_children():
