@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shutil
-import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -12,94 +10,28 @@ import pandas as pd
 
 from config import (
     COL_ID,
-    COL_EMAIL,
-    COL_FIRSTNAME,
-    COL_LASTNAME,
-    COL_USERNAME,
-    DEFAULT_USERS_FILE,
-    DEFAULT_USERS_SHEET,
-    DEFAULT_KEYWORDS_FILE,
-    DEFAULT_OUTPUT_FILE,
 )
+from state import AppState
 from io_utils import load_table, load_keywords_txt
 from filters_duplicates import mark_duplicate_accounts
 from filters_technical import mark_technical_accounts
 from filters_employee_list import mark_by_employee_list
-from exporter import build_upload_export, export_utf8_csv
-
-
-def _bundle_base_dir() -> Path:
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS)
-    return Path(__file__).resolve().parent
-
-
-def _app_runtime_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
-
-
-class AppState:
-    def __init__(self) -> None:
-        self.bundle_dir = _bundle_base_dir()
-        self.runtime_dir = _app_runtime_dir()
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
-
-        self.users_file = str(self.runtime_dir / DEFAULT_USERS_FILE)
-        self.users_sheet = DEFAULT_USERS_SHEET
-        self.keywords_file = str(self.runtime_dir / DEFAULT_KEYWORDS_FILE)
-        self.output_file = str(self.runtime_dir / DEFAULT_OUTPUT_FILE)
-        self.original_df: pd.DataFrame | None = None
-        self.current_df: pd.DataFrame | None = None
-        self.batch_export_tracker_file = self.runtime_dir / "batch_export_tracker.json"
-        self.ui_state_file = self.runtime_dir / "ui_state.json"
-        self.batch_exported_ids: set[str] = set()
-        self._seed_runtime_file("README.md")
-        self._seed_runtime_file("keywords_technische_accounts.txt")
-        self._seed_runtime_file("batch_export_tracker.json", default_text='{"exported_ids": []}\n')
-        self._seed_runtime_file("ui_state.json", default_text="{}\n")
-        self._load_batch_export_tracker()
-
-    def _seed_runtime_file(self, filename: str, default_text: str | None = None) -> None:
-        dst = self.runtime_dir / filename
-        if dst.exists():
-            return
-        src = self.bundle_dir / filename
-        try:
-            if src.exists():
-                shutil.copy2(src, dst)
-            elif default_text is not None:
-                dst.write_text(default_text, encoding="utf-8")
-        except Exception:
-            # Best effort only; file may be created later by normal app flow.
-            pass
-
-    def load_users(self) -> None:
-        self.original_df = load_table(self.users_file, self.users_sheet)
-        self.current_df = self.original_df.copy()
-
-    def reset(self) -> None:
-        if self.original_df is None:
-            raise RuntimeError("Noch keine Benutzerdatei geladen.")
-        self.current_df = self.original_df.copy()
-
-    def _load_batch_export_tracker(self) -> None:
-        p = self.batch_export_tracker_file
-        if not p.exists():
-            self.batch_exported_ids = set()
-            return
-        try:
-            payload = json.loads(p.read_text(encoding="utf-8"))
-            ids = payload.get("exported_ids", [])
-            self.batch_exported_ids = {str(x) for x in ids if str(x).strip()}
-        except Exception:
-            self.batch_exported_ids = set()
-
-    def save_batch_export_tracker(self) -> None:
-        p = self.batch_export_tracker_file
-        payload = {"exported_ids": sorted(self.batch_exported_ids)}
-        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+from exporter import export_utf8_csv
+from export_service import build_export_df, format_export_log_message
+from auto_template_service import (
+    build_internal_duplicate_template_data,
+    build_internal_technical_template_data,
+    find_template_index_by_name,
+    upsert_auto_template,
+)
+from export_dialogs import open_batch_export_window, open_current_table_dialog
+from duplicate_dialogs import open_duplicate_review_dialog
+from template_service import (
+    apply_employee_templates,
+    build_internal_template_data,
+    normalize_employee_list_sheet,
+    sanitize_employee_templates,
+)
 
 
 class TreeSolutionHelperUI:
@@ -127,8 +59,11 @@ class TreeSolutionHelperUI:
         self.technical_template_name = "Technische Accounts (Auto)"
         self.duplicate_template_name = "Duplikate ausgeschlossen (Auto)"
         self.duplicate_excluded_ids: set[str] = set()
+        self._ui_state_load_warning_active = False
+        self._ui_state_save_warning_active = False
 
         self._build_ui()
+        self._flush_state_runtime_warnings()
         self._refresh_status()
         self._load_ui_state()
         self._ensure_technical_template_present()
@@ -307,6 +242,10 @@ class TreeSolutionHelperUI:
         self.log.insert(tk.END, text.rstrip() + "\n")
         self.log.see(tk.END)
 
+    def _flush_state_runtime_warnings(self) -> None:
+        for warning in self.state.consume_runtime_warnings():
+            self._log(f"Warnung: {warning}")
+
     def _refresh_status(self) -> None:
         rows = "(nicht geladen)" if self.state.current_df is None else str(len(self.state.current_df))
         self.status_var.set(f"Aktuelle Zeilen: {rows}")
@@ -338,7 +277,11 @@ class TreeSolutionHelperUI:
             return
         try:
             payload = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
+            self._ui_state_load_warning_active = False
+        except Exception as exc:
+            if not self._ui_state_load_warning_active:
+                self._log(f"Warnung: UI-Status konnte nicht geladen werden: {p.name} ({exc})")
+                self._ui_state_load_warning_active = True
             return
 
         users_file = str(payload.get("users_file", "")).strip()
@@ -406,58 +349,17 @@ class TreeSolutionHelperUI:
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        except Exception:
-            pass
+            self._ui_state_save_warning_active = False
+        except Exception as exc:
+            if not self._ui_state_save_warning_active:
+                self._log(f"Warnung: UI-Status konnte nicht gespeichert werden: {self.state.ui_state_file.name} ({exc})")
+                self._ui_state_save_warning_active = True
 
     def _sanitize_employee_templates(self, templates_raw) -> list[dict]:
-        out: list[dict] = []
-        if not isinstance(templates_raw, list):
-            return out
-        for item in templates_raw:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name", "")).strip()
-            file_path = str(item.get("file", "")).strip()
-            sheet = str(item.get("sheet", "")).strip()
-            mode = str(item.get("mode", "include")).strip().casefold()
-            kind = str(item.get("kind", "employee")).strip().casefold()
-            readonly = bool(item.get("readonly", False))
-            if not name or not file_path:
-                continue
-            if mode not in ("include", "exclude"):
-                mode = "include"
-            if kind not in ("employee", "technical", "duplicate"):
-                kind = "employee"
-            internal_ids_raw = item.get("internal_ids", [])
-            internal_rows_raw = item.get("internal_rows", [])
-            internal_ids = []
-            if isinstance(internal_ids_raw, list):
-                internal_ids = [str(x).strip() for x in internal_ids_raw if str(x).strip()]
-            internal_rows = []
-            if isinstance(internal_rows_raw, list):
-                for r in internal_rows_raw:
-                    if isinstance(r, dict):
-                        internal_rows.append({str(k): str(v) for k, v in r.items()})
-            out.append(
-                {
-                    "name": name,
-                    "file": file_path,
-                    "sheet": sheet,
-                    "mode": mode,
-                    "kind": kind,
-                    "readonly": readonly,
-                    "internal_ids": sorted(set(internal_ids)),
-                    "internal_rows": internal_rows,
-                }
-            )
-        return out
+        return sanitize_employee_templates(templates_raw)
 
     def _find_template_index_by_name(self, name: str) -> int | None:
-        name_cf = str(name).strip().casefold()
-        for i, t in enumerate(self.employee_list_templates):
-            if str(t.get("name", "")).strip().casefold() == name_cf:
-                return i
-        return None
+        return find_template_index_by_name(self.employee_list_templates, name)
 
     def _bind_employee_template_context_menu(self, tree: ttk.Treeview) -> None:
         menu = tk.Menu(tree, tearoff=0)
@@ -484,46 +386,21 @@ class TreeSolutionHelperUI:
             return [], [], 0
         if marked_df is None:
             marked_df, _keywords = self._get_marked_technical_df()
-        if COL_ID not in marked_df.columns:
-            return [], [], 0
-        if "flag_technical_account" not in marked_df.columns:
-            return [], [], 0
-        matched_df = marked_df[marked_df["flag_technical_account"] == True].copy()
-        if matched_df.empty:
-            return [], [], 0
-        matched_df = matched_df.drop(
-            columns=["flag_technical_account", "flag_technical_reason"],
-            errors="ignore",
-        ).fillna("").astype(str)
-        ids = sorted(
-            {
-                str(v).strip()
-                for v in matched_df[COL_ID].fillna("").astype(str)
-                if str(v).strip()
-            }
-        )
-        rows = matched_df.to_dict(orient="records")
-        return ids, rows, len(matched_df)
+        return build_internal_technical_template_data(marked_df, COL_ID)
 
     def _ensure_technical_template_present(self, marked_df: pd.DataFrame | None = None) -> None:
         ids, rows, hits = self._build_internal_technical_template_data(marked_df=marked_df)
-        idx = self._find_template_index_by_name(self.technical_template_name)
-        payload = {
-            "name": self.technical_template_name,
-            "file": "<auto:keywords_technische_accounts>",
-            "sheet": "",
-            "mode": "exclude",
-            "kind": "technical",
-            "readonly": True,
-            "internal_ids": ids,
-            "internal_rows": rows,
-        }
-        if idx is None:
-            self.employee_list_templates.insert(0, payload)
+        inserted, _payload = upsert_auto_template(
+            self.employee_list_templates,
+            self.technical_template_name,
+            "<auto:keywords_technische_accounts>",
+            "technical",
+            ids,
+            rows,
+            insert_at=0,
+        )
+        if inserted:
             self._log(f"Auto-Vorlage bereitgestellt: {self.technical_template_name} | Treffer: {hits}")
-        else:
-            existing = self.employee_list_templates[idx]
-            existing.update(payload)
 
     def _build_internal_duplicate_template_data(
         self,
@@ -533,44 +410,22 @@ class TreeSolutionHelperUI:
             return [], [], 0
         if marked_df is None:
             marked_df = self._get_marked_duplicate_df()
-        if COL_ID not in marked_df.columns:
-            return [], [], 0
-        matched_df = marked_df[
-            marked_df[COL_ID].fillna("").astype(str).str.strip().isin(self.duplicate_excluded_ids)
-        ].copy()
-        if matched_df.empty:
-            return [], [], 0
-        matched_df = matched_df.fillna("").astype(str)
-        ids = sorted(
-            {
-                str(v).strip()
-                for v in matched_df[COL_ID].fillna("").astype(str)
-                if str(v).strip()
-            }
-        )
-        rows = matched_df.to_dict(orient="records")
-        return ids, rows, len(matched_df)
+        return build_internal_duplicate_template_data(marked_df, self.duplicate_excluded_ids, COL_ID)
 
     def _ensure_duplicate_template_present(self, marked_df: pd.DataFrame | None = None) -> None:
         ids, rows, hits = self._build_internal_duplicate_template_data(marked_df=marked_df)
-        idx = self._find_template_index_by_name(self.duplicate_template_name)
-        payload = {
-            "name": self.duplicate_template_name,
-            "file": "<auto:duplicate_review>",
-            "sheet": "",
-            "mode": "exclude",
-            "kind": "duplicate",
-            "readonly": True,
-            "internal_ids": ids,
-            "internal_rows": rows,
-        }
-        if idx is None:
-            insert_at = 1 if self._find_template_index_by_name(self.technical_template_name) is not None else 0
-            self.employee_list_templates.insert(insert_at, payload)
+        insert_at = 1 if self._find_template_index_by_name(self.technical_template_name) is not None else 0
+        inserted, _payload = upsert_auto_template(
+            self.employee_list_templates,
+            self.duplicate_template_name,
+            "<auto:duplicate_review>",
+            "duplicate",
+            ids,
+            rows,
+            insert_at=insert_at,
+        )
+        if inserted:
             self._log(f"Auto-Vorlage bereitgestellt: {self.duplicate_template_name} | Treffer: {hits}")
-        else:
-            existing = self.employee_list_templates[idx]
-            existing.update(payload)
 
     def _refresh_employee_templates_view(self) -> None:
         if self.employee_templates_tree is None:
@@ -683,27 +538,9 @@ class TreeSolutionHelperUI:
 
     def _build_internal_template_data(self, file_path: str, sheet: str | None) -> tuple[list[str], list[dict], int]:
         df_base, _keywords = self._get_marked_technical_df()
-        if COL_ID not in df_base.columns:
-            raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der Benutzerdatei.")
         if "flag_technical_account" in df_base.columns:
             df_base = df_base[df_base["flag_technical_account"] != True].copy()
-        df_list = load_table(file_path, sheet or None)
-        flag_name = "__template_build_match"
-        marked_df, _stats = mark_by_employee_list(df_base, df_list, flag_name=flag_name, return_stats=True)
-        matched_df = marked_df[marked_df[flag_name] == True].copy()
-        if matched_df.empty:
-            return [], [], 0
-        matched_df = matched_df.drop(columns=[flag_name, f"{flag_name}_reason"], errors="ignore")
-        matched_df = matched_df.fillna("").astype(str)
-        internal_ids = sorted(
-            {
-                str(v).strip()
-                for v in matched_df[COL_ID].fillna("").astype(str)
-                if str(v).strip()
-            }
-        )
-        internal_rows = matched_df.to_dict(orient="records")
-        return internal_ids, internal_rows, len(matched_df)
+        return build_internal_template_data(df_base, file_path, sheet)
 
     def open_employee_template_dialog(self) -> None:
         self._ensure_original_users_loaded()
@@ -978,23 +815,12 @@ class TreeSolutionHelperUI:
         return save_path
 
     def _build_export_df_from_source(self, df_source: pd.DataFrame) -> pd.DataFrame:
-        department_override = self.export_department_override_var.get().strip()
         department_overrides = self._get_export_department_override_values()
-        return build_upload_export(
-            df_source,
-            department_override=department_override or None,
-            department_overrides=department_overrides or None,
-        )
+        return build_export_df(df_source, department_overrides)
 
     def _log_export_result(self, rows: int) -> None:
         department_overrides = self._get_export_department_override_values()
-        if department_overrides:
-            self._log(
-                f"Export geschrieben: {self.state.output_file} | Zeilen: {rows} | "
-                f"Departments: {', '.join(department_overrides)}"
-            )
-        else:
-            self._log(f"Export geschrieben: {self.state.output_file} | Zeilen: {rows}")
+        self._log(format_export_log_message(self.state.output_file, rows, department_overrides))
 
     def _export_regular_from_df(self, df_source: pd.DataFrame, initialfile: str = "Upload.csv") -> None:
         save_path = self._ask_export_save_path(initialfile=initialfile)
@@ -1008,6 +834,7 @@ class TreeSolutionHelperUI:
         messagebox.showinfo("Export", f"Export geschrieben:\n{self.state.output_file}")
 
     def _export_next_batch_from_df(self, df_source: pd.DataFrame) -> None:
+        self._ensure_batch_export_tracker_ready()
         df = df_source.copy()
         if COL_ID not in df.columns:
             raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der aktuellen Auswahl.")
@@ -1144,10 +971,7 @@ class TreeSolutionHelperUI:
             self._save_ui_state()
 
     def _normalize_employee_list_sheet(self, list_file: str, list_sheet: str | None) -> str | None:
-        sheet = (list_sheet or "").strip() or None
-        if Path(list_file).suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
-            return None
-        return sheet
+        return normalize_employee_list_sheet(list_file, list_sheet)
 
     def _ensure_original_users_loaded(self) -> pd.DataFrame:
         if self.state.original_df is None:
@@ -1248,68 +1072,24 @@ class TreeSolutionHelperUI:
         template_indices: list[int],
         label: str,
     ) -> tuple[pd.DataFrame, int, int]:
-        if not template_indices:
-            raise RuntimeError("Keine Vorlagen ausgewählt.")
+        def _rebuild_template(template: dict) -> tuple[list[str], list[dict], int]:
+            template_kind = str(template.get("kind", "employee"))
+            if template_kind == "technical":
+                return self._build_internal_technical_template_data()
+            if template_kind == "duplicate":
+                return self._build_internal_duplicate_template_data()
+            file_path = str(template.get("file", "")).strip()
+            sheet = str(template.get("sheet", "")).strip()
+            return self._build_internal_template_data(file_path, sheet) if file_path else ([], [], 0)
 
-        if COL_ID not in df_base.columns:
-            raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der Benutzerdatei.")
-        id_series = df_base[COL_ID].fillna("").astype(str).str.strip()
-        include_mask = pd.Series(False, index=df_base.index)
-        exclude_mask = pd.Series(False, index=df_base.index)
-        include_count = 0
-        exclude_count = 0
-
-        for i in template_indices:
-            template = self.employee_list_templates[i]
-            ids_in_template = {
-                str(v).strip()
-                for v in template.get("internal_ids", [])
-                if str(v).strip()
-            }
-            if not ids_in_template:
-                rows = template.get("internal_rows", [])
-                for row in rows if isinstance(rows, list) else []:
-                    if isinstance(row, dict):
-                        v = str(row.get(COL_ID, "")).strip()
-                        if v:
-                            ids_in_template.add(v)
-
-            # Migration/Fallback: ältere Vorlagen ohne interne Liste neu aufbauen.
-            if not ids_in_template:
-                template_kind = str(template.get("kind", "employee"))
-                if template_kind == "technical":
-                    rebuilt_ids, rebuilt_rows, _hits = self._build_internal_technical_template_data()
-                elif template_kind == "duplicate":
-                    rebuilt_ids, rebuilt_rows, _hits = self._build_internal_duplicate_template_data()
-                else:
-                    file_path = str(template.get("file", "")).strip()
-                    sheet = str(template.get("sheet", "")).strip()
-                    rebuilt_ids, rebuilt_rows, _hits = self._build_internal_template_data(file_path, sheet) if file_path else ([], [], 0)
-                ids_in_template = set(rebuilt_ids)
-                template["internal_ids"] = rebuilt_ids
-                template["internal_rows"] = rebuilt_rows
-
-            row_mask = id_series.isin(ids_in_template)
-            hits = int(row_mask.sum())
-            mode = str(template.get("mode", "include"))
-            mode_label = "einschliessen" if mode == "include" else "ausschliessen"
-            self._log(
-                f"{label} | Vorlage '{template['name']}' ({mode_label}) geprüft über interne Liste. "
-                f"Interne IDs: {len(ids_in_template)} | Treffer in Benutzerdatei: {hits}"
-            )
-            if mode == "include":
-                include_mask = include_mask | row_mask
-                include_count += 1
-            else:
-                exclude_mask = exclude_mask | row_mask
-                exclude_count += 1
-
+        selected_df, include_count, exclude_count = apply_employee_templates(
+            df_base,
+            self.employee_list_templates,
+            template_indices,
+            rebuild_callback=_rebuild_template,
+            log_callback=lambda msg: self._log(f"{label} | {msg}"),
+        )
         self._save_ui_state()
-
-        selected_mask = ~exclude_mask
-        if include_count > 0:
-            selected_mask = selected_mask | include_mask
-        selected_df = df_base[selected_mask].copy()
         return selected_df, include_count, exclude_count
 
     def load_selected_employee_template(self) -> None:
@@ -1488,210 +1268,7 @@ class TreeSolutionHelperUI:
 
     def review_duplicates(self) -> None:
         def _run() -> None:
-            marked_df = self._get_marked_duplicate_df()
-            if "flag_duplicate" not in marked_df.columns:
-                raise RuntimeError("Duplikate konnten nicht markiert werden.")
-
-            duplicate_df = marked_df[marked_df["flag_duplicate"] == True].copy()
-            if duplicate_df.empty:
-                messagebox.showinfo("Keine Duplikate", "Es wurden keine Duplikate gefunden.")
-                return
-            if COL_ID not in duplicate_df.columns:
-                raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der Benutzerdatei.")
-
-            duplicate_df[COL_ID] = duplicate_df[COL_ID].fillna("").astype(str).str.strip()
-            duplicate_df = duplicate_df.sort_values(
-                by=["flag_duplicate_group", COL_LASTNAME, COL_FIRSTNAME, COL_EMAIL, COL_USERNAME],
-                kind="stable",
-            )
-            group_ids = [g for g in duplicate_df["flag_duplicate_group"].dropna().astype(str).unique() if g.strip()]
-            if not group_ids:
-                messagebox.showinfo("Keine Duplikate", "Es wurden keine Dublettengruppen gefunden.")
-                return
-
-            win = tk.Toplevel(self.root)
-            win.title(f"Duplikate prüfen ({len(group_ids)} Gruppen)")
-            win.geometry("1320x760")
-            self._make_modal(win)
-
-            container = tk.Frame(win, padx=8, pady=8)
-            container.pack(fill="both", expand=True)
-
-            tk.Label(
-                container,
-                text=(
-                    "Checkbox aktiviert = Account wird ausgeschlossen. "
-                    "Pro Duplikat-Gruppe muss mindestens ein Eintrag aktiv bleiben."
-                ),
-                anchor="w",
-                justify="left",
-            ).pack(fill="x", pady=(0, 8))
-
-            columns = [
-                "__exclude",
-                "flag_duplicate_group",
-                COL_ID,
-                COL_USERNAME,
-                COL_EMAIL,
-                COL_FIRSTNAME,
-                COL_LASTNAME,
-                "flag_duplicate_reason",
-            ]
-            labels = {
-                "__exclude": "Ausschließen",
-                "flag_duplicate_group": "Gruppe",
-                COL_ID: "id",
-                COL_USERNAME: "username",
-                COL_EMAIL: "email",
-                COL_FIRSTNAME: "firstname",
-                COL_LASTNAME: "lastname",
-                "flag_duplicate_reason": "Grund",
-            }
-
-            table_frame = tk.Frame(container)
-            table_frame.pack(fill="both", expand=True)
-            tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
-            vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-            hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
-            tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-            tree.grid(row=0, column=0, sticky="nsew")
-            vsb.grid(row=0, column=1, sticky="ns")
-            hsb.grid(row=1, column=0, sticky="ew")
-            table_frame.grid_rowconfigure(0, weight=1)
-            table_frame.grid_columnconfigure(0, weight=1)
-
-            for col in columns:
-                tree.heading(col, text=labels.get(col, col))
-                width = 130
-                if col == "__exclude":
-                    width = 110
-                elif col == "flag_duplicate_reason":
-                    width = 240
-                tree.column(col, width=width, minwidth=90, stretch=True)
-
-            tree.tag_configure("odd", background="#f6f8fb")
-            tree.tag_configure("even", background="#ffffff")
-
-            row_state: dict[str, dict] = {}
-            for i, (_, row) in enumerate(duplicate_df.fillna("").astype(str).iterrows()):
-                row_id = str(row.get(COL_ID, "")).strip()
-                if not row_id:
-                    continue
-                excluded = row_id in self.duplicate_excluded_ids
-                iid = f"dup-{i}"
-                tree.insert(
-                    "",
-                    "end",
-                    iid=iid,
-                    values=[
-                        "☑" if excluded else "☐",
-                        row.get("flag_duplicate_group", ""),
-                        row_id,
-                        row.get(COL_USERNAME, ""),
-                        row.get(COL_EMAIL, ""),
-                        row.get(COL_FIRSTNAME, ""),
-                        row.get(COL_LASTNAME, ""),
-                        row.get("flag_duplicate_reason", ""),
-                    ],
-                    tags=("odd" if i % 2 else "even",),
-                )
-                row_state[iid] = {
-                    "id": row_id,
-                    "group": str(row.get("flag_duplicate_group", "")).strip(),
-                    "excluded": excluded,
-                }
-
-            def _refresh_row(iid: str) -> None:
-                state = row_state[iid]
-                current_values = list(tree.item(iid, "values"))
-                current_values[0] = "☑" if state["excluded"] else "☐"
-                tree.item(iid, values=current_values)
-
-            def _toggle_selected_row(event=None) -> None:
-                current_iid = tree.focus()
-                if event is not None and not current_iid:
-                    current_iid = tree.identify_row(event.y)
-                if not current_iid or current_iid not in row_state:
-                    return
-                row_state[current_iid]["excluded"] = not bool(row_state[current_iid]["excluded"])
-                _refresh_row(current_iid)
-
-            def _toggle_checkbox_click(event) -> None:
-                iid = tree.identify_row(event.y)
-                col = tree.identify_column(event.x)
-                if iid and col == "#1":
-                    tree.focus(iid)
-                    tree.selection_set(iid)
-                    _toggle_selected_row()
-
-            tree.bind("<Button-1>", _toggle_checkbox_click, add="+")
-            tree.bind("<Double-1>", _toggle_selected_row)
-            tree.bind("<space>", _toggle_selected_row)
-
-            footer = tk.Frame(container)
-            footer.pack(fill="x", pady=(8, 0))
-
-            def _validate_selection() -> None:
-                active_per_group: dict[str, int] = {}
-                for state in row_state.values():
-                    group = str(state["group"]).strip()
-                    if group and not bool(state["excluded"]):
-                        active_per_group[group] = active_per_group.get(group, 0) + 1
-                invalid_groups = [group for group in group_ids if active_per_group.get(group, 0) == 0]
-                if invalid_groups:
-                    raise RuntimeError(
-                        "Mindestens ein Account pro Gruppe muss aktiv bleiben. "
-                        f"Ungültige Gruppen: {', '.join(invalid_groups[:10])}"
-                    )
-
-            def _exclude_all_but_first() -> None:
-                for group in group_ids:
-                    group_iids = [iid for iid, state in row_state.items() if state["group"] == group]
-                    group_iids.sort(key=lambda iid: tuple(str(v) for v in tree.item(iid, "values")[2:6]))
-                    for pos, iid in enumerate(group_iids):
-                        row_state[iid]["excluded"] = pos > 0
-                        _refresh_row(iid)
-
-            def _save_selection() -> None:
-                _validate_selection()
-                self.duplicate_excluded_ids = {
-                    state["id"]
-                    for state in row_state.values()
-                    if bool(state["excluded"]) and str(state["id"]).strip()
-                }
-                self._ensure_duplicate_template_present(marked_df=marked_df)
-                self._save_ui_state()
-                self._refresh_employee_templates_view()
-
-                df_base = self._ensure_original_users_loaded()
-                all_indices = list(range(len(self.employee_list_templates)))
-                selected_df, include_count, exclude_count = self._apply_employee_templates(
-                    df_base,
-                    all_indices,
-                    label="Alle Vorlagen",
-                )
-                self.state.current_df = selected_df
-                self._log(
-                    f"Duplikat-Entscheidungen gespeichert. Gruppen: {len(group_ids)} | "
-                    f"Ausgeschlossene IDs: {len(self.duplicate_excluded_ids)} | "
-                    f"Vorlagen aktiv: {len(all_indices)} | Einschliessen: {include_count} | Ausschliessen: {exclude_count}"
-                )
-                self.preview_current()
-                win.destroy()
-
-            tk.Button(
-                footer,
-                text="Alle außer erster ausschließen",
-                command=lambda: self._with_errors(_exclude_all_but_first),
-                width=28,
-            ).pack(side="left")
-            tk.Button(
-                footer,
-                text="Speichern",
-                command=lambda: self._with_errors(_save_selection),
-                width=14,
-            ).pack(side="right", padx=(6, 0))
-            tk.Button(footer, text="Abbrechen", command=win.destroy, width=14).pack(side="right")
+            open_duplicate_review_dialog(self)
         self._with_errors(_run)
 
     def mark_employee_list(self) -> None:
@@ -1741,21 +1318,30 @@ class TreeSolutionHelperUI:
     def reset_batch_export_tracker(self) -> None:
         def _run() -> None:
             count_before = len(self.state.batch_exported_ids)
-            if count_before == 0:
+            tracker_error = self.state.batch_export_tracker_error
+            if count_before == 0 and not tracker_error:
                 self._log("Batch-Merkliste ist bereits leer.")
                 return
 
+            prompt = (
+                "Alle gemerkten Batch-Export-IDs wirklich löschen?\n"
+                "Danach können Einträge erneut über den Batch-Export exportiert werden."
+            )
+            if tracker_error:
+                prompt = (
+                    "Die Batch-Merkliste ist beschädigt und wird aktuell nicht verwendet.\n"
+                    "Soll sie jetzt zurückgesetzt und neu angelegt werden?\n\n"
+                    f"Details: {tracker_error}"
+                )
             confirmed = messagebox.askyesno(
                 "Batch-Merkliste zurücksetzen",
-                "Alle gemerkten Batch-Export-IDs wirklich löschen?\n"
-                "Danach können Einträge erneut über den Batch-Export exportiert werden.",
+                prompt,
             )
             if not confirmed:
                 self._log("Zurücksetzen der Batch-Merkliste abgebrochen.")
                 return
 
-            self.state.batch_exported_ids.clear()
-            self.state.save_batch_export_tracker()
+            self.state.reset_batch_export_tracker()
             self._log(
                 "Batch-Merkliste zurückgesetzt: "
                 f"{count_before} gemerkte IDs entfernt | Datei: {self.state.batch_export_tracker_file.name}"
@@ -1788,242 +1374,19 @@ class TreeSolutionHelperUI:
         delete_callback=None,
         delete_confirm_text: str | None = None,
     ) -> None:
-        df = df_override if df_override is not None else self.state.current_df
-        if df is None:
-            messagebox.showinfo("Keine Daten", "Noch keine Benutzerdatei geladen.")
-            return
-        view_state = {
-            "base_df": df.copy(),
-            "display_df": df.copy(),
-            "sort_col": None,
-            "sort_asc": True,
-            "filters": {},
-            "iid_to_index": {},
-        }
-        previous_output_csv = self.output_file_var.get().strip()
-        self.output_file_var.set("Upload.csv")
-        self.state.output_file = "Upload.csv"
-
-        win = tk.Toplevel(self.root)
-        win.title(title_override or f"Aktuelle Auswahl ({len(df)} Zeilen)")
-        win.geometry("1200x700")
-        self._make_modal(win)
-
-        container = tk.Frame(win, padx=8, pady=8)
-        container.pack(fill="both", expand=True)
-
-        info_var = tk.StringVar(value=f"{len(df)} Zeilen | {len(df.columns)} Spalten")
-        info = tk.Label(container, textvariable=info_var, anchor="w")
-        info.pack(fill="x", pady=(0, 6))
-
-        export_controls = tk.LabelFrame(container, text="Export für diese Auswahl", padx=8, pady=8)
-        export_controls.pack(fill="x", pady=(0, 8))
-        self._build_entry_row(
-            export_controls,
-            "Output CSV",
-            self.output_file_var,
-            row=0,
-            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy(), initialfile="Upload.csv")),
+        open_current_table_dialog(
+            self,
+            df_override=df_override,
+            title_override=title_override,
+            sync_state=sync_state,
+            delete_callback=delete_callback,
+            delete_confirm_text=delete_confirm_text,
         )
-        self._build_department_override_controls(
-            export_controls,
-            start_row=1,
-            on_enter=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy())),
-        )
-
-        table_toolbar = tk.Frame(container)
-        table_toolbar.pack(fill="x", pady=(0, 8))
-        tk.Label(
-            table_toolbar,
-            text="Sortieren: Klick auf Spaltenkopf | Filtern: Rechtsklick auf Spaltenkopf (Dropdown)",
-            anchor="w",
-        ).pack(side="left")
-
-        table_frame = tk.Frame(container)
-        table_frame.pack(fill="both", expand=True)
-
-        columns = [str(c) for c in df.columns]
-        tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="extended")
-
-        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-
-        tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        table_frame.grid_rowconfigure(0, weight=1)
-        table_frame.grid_columnconfigure(0, weight=1)
-
-        for col in columns:
-            tree.heading(col, text=col)
-            width = min(max(100, len(col) * 10), 260)
-            tree.column(col, width=width, minwidth=80, stretch=True)
-
-        tree.tag_configure("odd", background="#f6f8fb")
-        tree.tag_configure("even", background="#ffffff")
-
-        def _apply_filters_and_sort() -> None:
-            view_state["display_df"] = self._filter_and_sort_df(
-                view_state["base_df"],
-                view_state["filters"],
-                view_state["sort_col"],
-                view_state["sort_asc"],
-            ).copy()
-
-        def refresh_selection_table() -> None:
-            _apply_filters_and_sort()
-            display_df = view_state["display_df"]
-            tree.delete(*tree.get_children())
-            iid_to_index = {}
-            for i, (idx, row) in enumerate(display_df.fillna("").astype(str).iterrows()):
-                values = [row.get(col, "") for col in columns]
-                iid = str(i)
-                tree.insert("", "end", iid=iid, values=values, tags=("odd" if i % 2 else "even",))
-                iid_to_index[iid] = idx
-            view_state["iid_to_index"] = iid_to_index
-            if sync_state:
-                self.state.current_df = view_state["base_df"].copy()
-            filter_info = ""
-            if view_state["filters"]:
-                parts = [f"{col}='{term}'" for col, term in view_state["filters"].items()]
-                filter_info = " | Filter: " + " ; ".join(parts[:3])
-                if len(parts) > 3:
-                    filter_info += f" (+{len(parts) - 3})"
-            info_var.set(
-                f"{len(view_state['base_df'])} Zeilen gesamt | "
-                f"{len(display_df)} Zeilen angezeigt | "
-                f"{len(columns)} Spalten"
-                f"{filter_info}"
-            )
-            self._refresh_status()
-
-        row_menu = tk.Menu(win, tearoff=0)
-        header_menu = tk.Menu(win, tearoff=0)
-        active_header_col = {"name": None}
-
-        def remove_selected_entries() -> None:
-            selected = tree.selection()
-            if not selected:
-                return
-            current_df = view_state["base_df"]
-            if current_df.empty:
-                return
-            row_indices = [
-                view_state["iid_to_index"].get(str(iid))
-                for iid in selected
-                if str(iid) in view_state["iid_to_index"]
-            ]
-            valid_indices = [idx for idx in row_indices if idx in current_df.index]
-            if not valid_indices:
-                return
-            if delete_confirm_text:
-                confirmed = messagebox.askyesno("Sicher löschen", delete_confirm_text)
-                if not confirmed:
-                    return
-            selected_rows = current_df.loc[valid_indices].copy()
-            if delete_callback is not None:
-                delete_callback(selected_rows)
-            view_state["base_df"] = current_df.drop(index=valid_indices).copy()
-            if sync_state:
-                self.state.current_df = view_state["base_df"].copy()
-            self._log(f"Einträge aus Auswahl entfernt: {len(valid_indices)} | Verbleibend: {len(view_state['base_df'])}")
-            refresh_selection_table()
-
-        row_menu.add_command(label="Eintrag entfernen", command=lambda: self._with_errors(remove_selected_entries))
-
-        def _open_header_filter_dialog(col: str) -> None:
-            self._open_contains_filter_dialog(
-                parent=win,
-                col=col,
-                source_df=view_state["base_df"],
-                filters=view_state["filters"],
-                refresh_callback=refresh_selection_table,
-                columns=columns,
-            )
-
-        def _clear_header_filter(col: str) -> None:
-            if not col:
-                return
-            view_state["filters"].pop(col, None)
-            refresh_selection_table()
-
-        header_menu.add_command(
-            label="Filter setzen...",
-            command=lambda: self._with_errors(lambda: _open_header_filter_dialog(str(active_header_col["name"] or ""))),
-        )
-        header_menu.add_command(
-            label="Filter dieser Spalte löschen",
-            command=lambda: self._with_errors(lambda: _clear_header_filter(str(active_header_col["name"] or ""))),
-        )
-
-        def sort_by_column(col: str) -> None:
-            if view_state["sort_col"] == col:
-                view_state["sort_asc"] = not view_state["sort_asc"]
-            else:
-                view_state["sort_col"] = col
-                view_state["sort_asc"] = True
-            refresh_selection_table()
-
-        def _column_from_event(event) -> str | None:
-            return self._column_from_tree_event(tree, columns, event)
-
-        def show_context_menu(event) -> None:
-            header_col = _column_from_event(event)
-            if header_col:
-                active_header_col["name"] = header_col
-                header_menu.tk_popup(event.x_root, event.y_root)
-                header_menu.grab_release()
-                return
-            row_id = tree.identify_row(event.y)
-            if row_id:
-                current_selection = tree.selection()
-                if row_id not in current_selection:
-                    tree.selection_set(row_id)
-                tree.focus(row_id)
-            if tree.selection():
-                row_menu.tk_popup(event.x_root, event.y_root)
-            row_menu.grab_release()
-
-        tree.bind("<Button-3>", show_context_menu)
-        self._bind_treeview_shortcuts(tree, columns)
-
-        for col in columns:
-            tree.heading(col, text=col, command=lambda c=col: self._with_errors(lambda: sort_by_column(c)))
-
-        def clear_all_filters() -> None:
-            view_state["filters"].clear()
-            refresh_selection_table()
-
-        tk.Button(
-            table_toolbar,
-            text="Alle Filter löschen",
-            command=lambda: self._with_errors(clear_all_filters),
-            width=18,
-        ).pack(side="right")
-        refresh_selection_table()
-
-        def _restore_output_field_on_close() -> None:
-            self._reset_export_department_override_fields()
-            self.output_file_var.set(previous_output_csv)
-            self._save_ui_state()
-            win.destroy()
-
-        footer = tk.Frame(container)
-        footer.pack(fill="x", pady=(8, 0))
-        tk.Button(
-            footer,
-            text="Exportieren",
-            command=lambda: self._with_errors(lambda: self._export_regular_from_df(view_state["base_df"].copy(), initialfile="Upload.csv")),
-            width=16,
-        ).pack(side="right", padx=(6, 0))
-        tk.Button(footer, text="Abbrechen", command=_restore_output_field_on_close, width=16).pack(side="right")
-
-        win.protocol("WM_DELETE_WINDOW", _restore_output_field_on_close)
 
     def _get_batch_remaining_df(
         self, df_source: pd.DataFrame
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        self._ensure_batch_export_tracker_ready()
         if COL_ID not in df_source.columns:
             raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der aktuellen Auswahl.")
         df = df_source.copy()
@@ -2033,237 +1396,15 @@ class TreeSolutionHelperUI:
         remaining_df = eligible_df[~eligible_df["__batch_id"].isin(self.state.batch_exported_ids)].copy()
         return df, eligible_df, already_df, remaining_df
 
+    def _ensure_batch_export_tracker_ready(self) -> None:
+        if self.state.batch_export_tracker_error:
+            raise RuntimeError(
+                "Batch-Export ist blockiert, weil die Batch-Merkliste beschädigt ist. "
+                f"Bitte zuerst 'Batch-Merkliste zurücksetzen' ausführen. Details: {self.state.batch_export_tracker_error}"
+            )
+
     def show_batch_export_window(self) -> None:
-        df = self.state.current_df
-        if df is None:
-            messagebox.showinfo("Keine Daten", "Noch keine Benutzerdatei geladen.")
-            return
-        _, eligible_df_start, already_df_start, remaining_df_start = self._get_batch_remaining_df(df)
-        df_snapshot = remaining_df_start.drop(columns=["__batch_id"], errors="ignore").copy()
-        if df_snapshot.empty:
-            messagebox.showinfo(
-                "Keine neuen IDs",
-                "Es sind keine neuen batch-fähigen IDs mehr vorhanden.\n"
-                "Alle IDs aus der aktuellen Auswahl wurden bereits exportiert oder haben keine ID.",
-            )
-            return
-        batch_size_var = tk.StringVar(value=str(len(df_snapshot)))
-        previous_output_csv = self.output_file_var.get().strip()
-        self.output_file_var.set("Batch-Upload.csv")
-        self.state.output_file = "Batch-Upload.csv"
-
-        win = tk.Toplevel(self.root)
-        win.title(f"Batch-Export ({len(df_snapshot)} Zeilen nach Ausschluss gemerkter IDs)")
-        win.geometry("1250x760")
-        self._make_modal(win)
-
-        container = tk.Frame(win, padx=8, pady=8)
-        container.pack(fill="both", expand=True)
-
-        header = tk.Label(container, text="Aktuelle Auswahl als Batch exportieren", anchor="w")
-        header.pack(fill="x")
-
-        hint = tk.Label(
-            container,
-            text=(
-                "Hinweis: Bereits exportierte Einträge werden über die ID dauerhaft gemerkt "
-                "(auch nach dem Schliessen des Programms)."
-            ),
-            anchor="w",
-            justify="left",
-        )
-        hint.pack(fill="x", pady=(4, 8))
-
-        controls = tk.LabelFrame(container, text="Batch-Export", padx=8, pady=8)
-        controls.pack(fill="x", pady=(0, 8))
-        self._build_entry_row(controls, "Output CSV", self.output_file_var, row=0)
-        self._build_department_override_controls(controls, start_row=1, on_enter=lambda: self._with_errors(refresh_view))
-        self._build_entry_row(controls, "Batch-Grösse", batch_size_var, row=3)
-
-        stats_var = tk.StringVar(value="")
-        details_var = tk.StringVar(value="")
-        tracker_var = tk.StringVar(value="")
-        tk.Label(controls, textvariable=stats_var, anchor="w").grid(row=4, column=0, columnspan=3, padx=4, pady=(8, 2), sticky="w")
-        tk.Label(controls, textvariable=details_var, anchor="w").grid(row=5, column=0, columnspan=3, padx=4, pady=2, sticky="w")
-        tk.Label(controls, textvariable=tracker_var, anchor="w").grid(row=6, column=0, columnspan=3, padx=4, pady=2, sticky="w")
-
-        table_toolbar = tk.Frame(container)
-        table_toolbar.pack(fill="x", pady=(0, 8))
-        tk.Label(
-            table_toolbar,
-            text="Sortieren: Klick auf Spaltenkopf | Filtern: Rechtsklick auf Spaltenkopf (Dropdown)",
-            anchor="w",
-        ).pack(side="left")
-
-        table_frame = tk.Frame(container)
-        table_frame.pack(fill="both", expand=True)
-
-        batch_view_state = {
-            "sort_col": None,
-            "sort_asc": True,
-            "filters": {},
-            "last_source_df": pd.DataFrame(),
-        }
-        columns = [str(c) for c in df_snapshot.columns]
-        tree = ttk.Treeview(table_frame, columns=columns, show="headings")
-        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        table_frame.grid_rowconfigure(0, weight=1)
-        table_frame.grid_columnconfigure(0, weight=1)
-
-        for col in columns:
-            tree.heading(col, text=col)
-            width = min(max(100, len(col) * 10), 260)
-            tree.column(col, width=width, minwidth=80, stretch=True)
-        tree.tag_configure("odd", background="#f6f8fb")
-        tree.tag_configure("even", background="#ffffff")
-
-        def _apply_filters_and_sort(df_in: pd.DataFrame) -> pd.DataFrame:
-            return self._filter_and_sort_df(
-                df_in,
-                batch_view_state["filters"],
-                batch_view_state["sort_col"],
-                batch_view_state["sort_asc"],
-            )
-
-        def refresh_view() -> None:
-            _, eligible_df, already_df, remaining_df = self._get_batch_remaining_df(df_snapshot)
-            try:
-                batch_size = int(batch_size_var.get().strip())
-            except ValueError:
-                raise RuntimeError("Batch-Grösse muss eine ganze Zahl sein.")
-            if batch_size <= 0:
-                raise RuntimeError("Batch-Grösse muss grösser als 0 sein.")
-
-            selected_batch_df = remaining_df.head(batch_size).copy()
-            source_df = selected_batch_df.drop(columns=["__batch_id"], errors="ignore")
-            batch_view_state["last_source_df"] = source_df.copy()
-            display_df = _apply_filters_and_sort(source_df)
-            tree.delete(*tree.get_children())
-            for i, (_, row) in enumerate(display_df.fillna("").astype(str).iterrows()):
-                values = [row.get(col, "") for col in columns]
-                tree.insert("", "end", values=values, tags=("odd" if i % 2 else "even",))
-
-            stats_var.set(
-                f"Ausgangsauswahl batch-fähig: {len(eligible_df_start)} | "
-                f"Bereits exportiert: {len(already_df_start)} | "
-                f"Noch nicht exportiert: {len(remaining_df)}"
-            )
-            filter_info = ""
-            if batch_view_state["filters"]:
-                parts = [f"{col}='{term}'" for col, term in batch_view_state["filters"].items()]
-                filter_info = " | Filter: " + " ; ".join(parts[:3])
-                if len(parts) > 3:
-                    filter_info += f" (+{len(parts) - 3})"
-            details_var.set(
-                f"Batch-Auswahl: {len(source_df)} | Davon angezeigt: {len(display_df)} | "
-                f"Bereits exportiert (in dieser Auswahl): {len(already_df)} | "
-                f"Batch-Merkliste gesamt: {len(self.state.batch_exported_ids)} IDs"
-                f"{filter_info}"
-            )
-            tracker_var.set(f"Merkliste-Datei: {self.state.batch_export_tracker_file.name}")
-
-        active_header_col = {"name": None}
-        header_menu = tk.Menu(win, tearoff=0)
-
-        def _open_header_filter_dialog(col: str) -> None:
-            self._open_contains_filter_dialog(
-                parent=win,
-                col=col,
-                source_df=batch_view_state["last_source_df"],
-                filters=batch_view_state["filters"],
-                refresh_callback=refresh_view,
-                columns=columns,
-            )
-
-        def _clear_header_filter(col: str) -> None:
-            if not col:
-                return
-            batch_view_state["filters"].pop(col, None)
-            refresh_view()
-
-        header_menu.add_command(
-            label="Filter setzen...",
-            command=lambda: self._with_errors(lambda: _open_header_filter_dialog(str(active_header_col["name"] or ""))),
-        )
-        header_menu.add_command(
-            label="Filter dieser Spalte löschen",
-            command=lambda: self._with_errors(lambda: _clear_header_filter(str(active_header_col["name"] or ""))),
-        )
-
-        def sort_by_column(col: str) -> None:
-            if batch_view_state["sort_col"] == col:
-                batch_view_state["sort_asc"] = not batch_view_state["sort_asc"]
-            else:
-                batch_view_state["sort_col"] = col
-                batch_view_state["sort_asc"] = True
-            refresh_view()
-
-        def _column_from_event(event) -> str | None:
-            return self._column_from_tree_event(tree, columns, event)
-
-        def show_header_menu(event) -> None:
-            header_col = _column_from_event(event)
-            if not header_col:
-                return
-            active_header_col["name"] = header_col
-            header_menu.tk_popup(event.x_root, event.y_root)
-            header_menu.grab_release()
-
-        tree.bind("<Button-3>", show_header_menu)
-        self._bind_treeview_shortcuts(tree, columns)
-        for col in columns:
-            tree.heading(col, text=col, command=lambda c=col: self._with_errors(lambda: sort_by_column(c)))
-
-        def clear_all_filters() -> None:
-            batch_view_state["filters"].clear()
-            refresh_view()
-
-        tk.Button(
-            table_toolbar,
-            text="Alle Filter löschen",
-            command=lambda: self._with_errors(clear_all_filters),
-            width=18,
-        ).pack(side="right")
-
-        def run_batch_export() -> None:
-            self.batch_export_count_var.set(batch_size_var.get())
-            self.output_file_var.set("Batch-Upload.csv")
-            self.state.output_file = "Batch-Upload.csv"
-            self._with_errors(lambda: self._export_next_batch_from_df(df_snapshot))
-            refresh_view()
-
-        def _restore_output_field_on_close() -> None:
-            # Restore the main UI field value after closing the batch window.
-            self._reset_export_department_override_fields()
-            self.output_file_var.set(previous_output_csv)
-            self._save_ui_state()
-            win.destroy()
-
-        footer = tk.Frame(container)
-        footer.pack(fill="x", pady=(8, 0))
-        tk.Button(footer, text="Batch exportieren", command=run_batch_export, width=16).pack(side="right", padx=(6, 0))
-        tk.Button(footer, text="Abbrechen", command=_restore_output_field_on_close, width=16).pack(side="right")
-
-        win.protocol("WM_DELETE_WINDOW", _restore_output_field_on_close)
-
-        tk.Button(
-            controls,
-            text="Anzeige aktualisieren",
-            command=lambda: self._with_errors(refresh_view),
-            width=36,
-        ).grid(row=3, column=3, padx=4, pady=4, sticky="w")
-
-        # Enter in batch fields refreshes the proposed batch preview.
-        for child in controls.winfo_children():
-            if isinstance(child, tk.Entry):
-                child.bind("<Return>", lambda _e: self._with_errors(refresh_view))
-
-        self._with_errors(refresh_view)
+        open_batch_export_window(self)
 
 
 def run_ui() -> None:
