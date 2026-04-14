@@ -1,6 +1,9 @@
 name: Build TreeSolutionHelper
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
   release:
     types:
@@ -16,6 +19,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,7 +39,7 @@ jobs:
         run: |
           pyinstaller TreeSolutionHelper.spec
 
-      - name: Create versioned EXE filename
+      - name: Read version and create versioned EXE
         shell: powershell
         run: |
           $version = (Get-Content VERSION.txt -Raw).Trim()
@@ -45,6 +50,34 @@ jobs:
           Copy-Item dist\TreeSolutionHelper.exe "dist\$versionedName" -Force
           "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VERSIONED_EXE=dist\$versionedName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Move latest tag to current commit
+        if: github.event_name != 'release'
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa latest -m "Latest automated build"
+          git push origin refs/tags/latest --force
+
+      - name: Publish latest release
+        if: github.event_name != 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: |
+            Automatisch gebaut aus `${{ github.sha }}`.
+
+            Version laut `VERSION.txt`: `${{ env.APP_VERSION }}`
+
+            Direkter Download:
+            `${{ github.server_url }}/${{ github.repository }}/releases/latest/download/TreeSolutionHelper.exe`
+          files: dist\TreeSolutionHelper.exe
+          overwrite_files: true
+          make_latest: true
+          draft: false
+          prerelease: false
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -58,3 +91,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.VERSIONED_EXE }}
+          overwrite_files: true
+          make_latest: false
