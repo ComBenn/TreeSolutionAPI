@@ -1,9 +1,38 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from config import COL_EMAIL, COL_FIRSTNAME, COL_ID, COL_LASTNAME, COL_USERNAME
+
+
+def _normalize_sort_value(value: str) -> tuple[int, object]:
+    text = str(value).strip()
+    if text == "":
+        return (2, "")
+    try:
+        return (0, float(text.replace(",", ".")))
+    except ValueError:
+        return (1, text.casefold())
+
+
+def _filter_row_records(row_records: list[dict], filter_column: str, filter_text: str) -> list[dict]:
+    needle = str(filter_text).strip().casefold()
+    if not needle:
+        return list(row_records)
+    return [
+        record
+        for record in row_records
+        if needle in str(record["data"].get(filter_column, "")).casefold()
+    ]
+
+
+def _sort_row_records(row_records: list[dict], sort_column: str, descending: bool) -> list[dict]:
+    return sorted(
+        row_records,
+        key=lambda record: _normalize_sort_value(record["data"].get(sort_column, "")),
+        reverse=descending,
+    )
 
 
 def open_duplicate_review_dialog(ui) -> None:
@@ -66,7 +95,6 @@ def open_duplicate_review_dialog(ui) -> None:
         COL_LASTNAME: "lastname",
         "flag_duplicate_reason": "Grund",
     }
-
     table_frame = tk.Frame(container)
     table_frame.pack(fill="both", expand=True)
     tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
@@ -79,8 +107,16 @@ def open_duplicate_review_dialog(ui) -> None:
     table_frame.grid_rowconfigure(0, weight=1)
     table_frame.grid_columnconfigure(0, weight=1)
 
+    sort_state = {"column": "flag_duplicate_group", "descending": False}
+
+    def _heading_text(col: str) -> str:
+        text = labels.get(col, col)
+        if sort_state["column"] == col:
+            return f"{text} {'▼' if sort_state['descending'] else '▲'}"
+        return text
+
     for col in columns:
-        tree.heading(col, text=labels.get(col, col))
+        tree.heading(col, text=_heading_text(col), command=lambda c=col: None)
         width = 130
         if col == "__exclude":
             width = 110
@@ -90,41 +126,94 @@ def open_duplicate_review_dialog(ui) -> None:
 
     tree.tag_configure("odd", background="#f6f8fb")
     tree.tag_configure("even", background="#ffffff")
+    filter_status_var = tk.StringVar(value="Kein Filter aktiv")
+    tk.Label(container, textvariable=filter_status_var, anchor="w", justify="left").pack(fill="x", pady=(8, 0))
 
     row_state: dict[str, dict] = {}
+    row_records: list[dict] = []
     for i, (_, row) in enumerate(duplicate_df.fillna("").astype(str).iterrows()):
         row_id = str(row.get(COL_ID, "")).strip()
         if not row_id:
             continue
         excluded = row_id in ui.duplicate_excluded_ids
         iid = f"dup-{i}"
-        tree.insert(
-            "",
-            "end",
-            iid=iid,
-            values=[
-                "☑" if excluded else "☐",
-                row.get("flag_duplicate_group", ""),
-                row_id,
-                row.get(COL_USERNAME, ""),
-                row.get(COL_EMAIL, ""),
-                row.get(COL_FIRSTNAME, ""),
-                row.get(COL_LASTNAME, ""),
-                row.get("flag_duplicate_reason", ""),
-            ],
-            tags=("odd" if i % 2 else "even",),
-        )
-        row_state[iid] = {
+        data = {
             "id": row_id,
-            "group": str(row.get("flag_duplicate_group", "")).strip(),
-            "excluded": excluded,
+            "flag_duplicate_group": str(row.get("flag_duplicate_group", "")).strip(),
+            COL_ID: row_id,
+            COL_USERNAME: row.get(COL_USERNAME, ""),
+            COL_EMAIL: row.get(COL_EMAIL, ""),
+            COL_FIRSTNAME: row.get(COL_FIRSTNAME, ""),
+            COL_LASTNAME: row.get(COL_LASTNAME, ""),
+            "flag_duplicate_reason": row.get("flag_duplicate_reason", ""),
         }
+        record = {
+            "iid": iid,
+            "id": row_id,
+            "data": data,
+            "excluded": excluded,
+            "group": data["flag_duplicate_group"],
+        }
+        row_records.append(record)
+        row_state[iid] = record
 
-    def _refresh_row(iid: str) -> None:
-        state = row_state[iid]
-        current_values = list(tree.item(iid, "values"))
-        current_values[0] = "☑" if state["excluded"] else "☐"
-        tree.item(iid, values=current_values)
+    def _record_values(record: dict) -> list[str]:
+        return [
+            "☑" if record["excluded"] else "☐",
+            record["data"]["flag_duplicate_group"],
+            record["data"][COL_ID],
+            record["data"][COL_USERNAME],
+            record["data"][COL_EMAIL],
+            record["data"][COL_FIRSTNAME],
+            record["data"][COL_LASTNAME],
+            record["data"]["flag_duplicate_reason"],
+        ]
+
+    active_filter = {"column": "", "text": ""}
+
+    def _refresh_table() -> None:
+        filtered_records = _filter_row_records(row_records, active_filter["column"], active_filter["text"])
+        visible_records = _sort_row_records(
+            filtered_records,
+            sort_state["column"],
+            bool(sort_state["descending"]),
+        )
+        tree.delete(*tree.get_children())
+        for i, record in enumerate(visible_records):
+            tree.insert(
+                "",
+                "end",
+                iid=record["iid"],
+                values=_record_values(record),
+                tags=("odd" if i % 2 else "even",),
+            )
+        for col in columns:
+            tree.heading(col, text=_heading_text(col))
+
+    def _update_filter_status() -> None:
+        if active_filter["column"] and active_filter["text"]:
+            filter_status_var.set(
+                f"Filter aktiv: {labels.get(active_filter['column'], active_filter['column'])} enthält '{active_filter['text']}'"
+            )
+        else:
+            filter_status_var.set("Kein Filter aktiv")
+
+    def _clear_filter() -> None:
+        active_filter["column"] = ""
+        active_filter["text"] = ""
+        _update_filter_status()
+        _refresh_table()
+
+    def _on_sort_column(col: str) -> None:
+        if sort_state["column"] == col:
+            sort_state["descending"] = not bool(sort_state["descending"])
+        else:
+            sort_state["column"] = col
+            sort_state["descending"] = False
+        _refresh_table()
+
+    for col in columns:
+        tree.heading(col, text=_heading_text(col), command=lambda c=col: _on_sort_column(c))
 
     def _toggle_selected_row(event=None) -> None:
         current_iid = tree.focus()
@@ -133,7 +222,7 @@ def open_duplicate_review_dialog(ui) -> None:
         if not current_iid or current_iid not in row_state:
             return
         row_state[current_iid]["excluded"] = not bool(row_state[current_iid]["excluded"])
-        _refresh_row(current_iid)
+        _refresh_table()
 
     def _toggle_checkbox_click(event) -> None:
         iid = tree.identify_row(event.y)
@@ -143,9 +232,56 @@ def open_duplicate_review_dialog(ui) -> None:
             tree.selection_set(iid)
             _toggle_selected_row()
 
+    header_menu = tk.Menu(win, tearoff=0)
+
+    def _open_filter_dialog(column: str) -> None:
+        if column == "__exclude":
+            return
+        current_text = active_filter["text"] if active_filter["column"] == column else ""
+        filter_value = simpledialog.askstring(
+            "Filter setzen",
+            f"Filter für Spalte '{labels.get(column, column)}' eingeben:",
+            initialvalue=current_text,
+            parent=win,
+        )
+        if filter_value is None:
+            return
+        filter_value = str(filter_value).strip()
+        if not filter_value:
+            _clear_filter()
+            return
+        active_filter["column"] = column
+        active_filter["text"] = filter_value
+        _update_filter_status()
+        _refresh_table()
+
+    def _show_header_menu(event) -> None:
+        if tree.identify_region(event.x, event.y) != "heading":
+            return
+        column_ref = tree.identify_column(event.x)
+        if not column_ref or not column_ref.startswith("#"):
+            return
+        column_index = int(column_ref[1:]) - 1
+        if column_index < 0 or column_index >= len(columns):
+            return
+        column = columns[column_index]
+        if column == "__exclude":
+            return
+        header_menu.delete(0, "end")
+        header_menu.add_command(
+            label=f"Filter für {labels.get(column, column)} setzen",
+            command=lambda c=column: _open_filter_dialog(c),
+        )
+        header_menu.add_command(label="Filter entfernen", command=_clear_filter)
+        header_menu.tk_popup(event.x_root, event.y_root)
+
     tree.bind("<Button-1>", _toggle_checkbox_click, add="+")
+    tree.bind("<Button-3>", _show_header_menu, add="+")
     tree.bind("<Double-1>", _toggle_selected_row)
     tree.bind("<space>", _toggle_selected_row)
+
+    _refresh_table()
+    _update_filter_status()
 
     footer = tk.Frame(container)
     footer.pack(fill="x", pady=(8, 0))
@@ -165,17 +301,24 @@ def open_duplicate_review_dialog(ui) -> None:
 
     def _exclude_all_but_first() -> None:
         for group in group_ids:
-            group_iids = [iid for iid, state in row_state.items() if state["group"] == group]
-            group_iids.sort(key=lambda iid: tuple(str(v) for v in tree.item(iid, "values")[2:6]))
-            for pos, iid in enumerate(group_iids):
-                row_state[iid]["excluded"] = pos > 0
-                _refresh_row(iid)
+            group_records = [record for record in row_records if record["group"] == group]
+            group_records.sort(
+                key=lambda record: (
+                    str(record["data"][COL_ID]),
+                    str(record["data"][COL_USERNAME]),
+                    str(record["data"][COL_EMAIL]),
+                    str(record["data"][COL_FIRSTNAME]),
+                )
+            )
+            for pos, record in enumerate(group_records):
+                record["excluded"] = pos > 0
+        _refresh_table()
 
     def _open_selection_in_export_window(export_excluded: bool) -> None:
         selected_ids = [
-            state["id"]
-            for state in row_state.values()
-            if bool(state["excluded"]) == export_excluded and str(state["id"]).strip()
+            record["data"]["id"]
+            for record in row_state.values()
+            if bool(record["excluded"]) == export_excluded and str(record["data"]["id"]).strip()
         ]
         if not selected_ids:
             if export_excluded:
