@@ -137,6 +137,36 @@ class MarkDuplicateAccountsTests(unittest.TestCase):
         self.assertFalse(result.loc[1, "flag_duplicate"])
         self.assertEqual(result.loc[1, "flag_duplicate_group"], "")
 
+    def test_mark_duplicate_accounts_matches_swapped_firstname_lastname(self) -> None:
+        df = pd.DataFrame(
+            [
+                {
+                    "id": "22605",
+                    "username": "magali.roch@me",
+                    "email": "magali.roch@me",
+                    "firstname": "Magali",
+                    "lastname": "Roch",
+                    "flag_technical_account": False,
+                },
+                {
+                    "id": "23463",
+                    "username": "roc@risch.ch",
+                    "email": "magali.roch@risc.ch",
+                    "firstname": "Roch",
+                    "lastname": "Magali",
+                    "flag_technical_account": False,
+                },
+            ]
+        )
+
+        result = mark_duplicate_accounts(df)
+
+        self.assertTrue(result.loc[0, "flag_duplicate"])
+        self.assertTrue(result.loc[1, "flag_duplicate"])
+        self.assertEqual(result.loc[0, "flag_duplicate_group"], result.loc[1, "flag_duplicate_group"])
+        self.assertIn("duplicate_name", result.loc[0, "flag_duplicate_reason"])
+        self.assertIn("duplicate_name", result.loc[1, "flag_duplicate_reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

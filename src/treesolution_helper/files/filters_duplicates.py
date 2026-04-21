@@ -16,10 +16,20 @@ def _normalize_name_part(value) -> str:
         else:
             if current:
                 tokens.append("".join(current))
-                current = []
+            current = []
     if current:
         tokens.append("".join(current))
     return " ".join(tokens).strip()
+
+
+def _name_variants(firstname, lastname) -> set[str]:
+    first = _normalize_name_part(firstname)
+    last = _normalize_name_part(lastname)
+    variants = set()
+    if first and last:
+        variants.add(f"{last} {first}".strip())
+        variants.add(f"{first} {last}".strip())
+    return {value for value in variants if value}
 
 
 class _UnionFind:
@@ -69,17 +79,15 @@ def mark_duplicate_accounts(df_users: pd.DataFrame) -> pd.DataFrame:
             continue
         email = norm_text(row.get(COL_EMAIL, ""))
         username = norm_text(row.get(COL_USERNAME, ""))
-        lastname = _normalize_name_part(row.get(COL_LASTNAME, ""))
-        firstname = _normalize_name_part(row.get(COL_FIRSTNAME, ""))
-        full_name = f"{lastname} {firstname}".strip() if lastname and firstname else ""
+        name_variants = _name_variants(row.get(COL_FIRSTNAME, ""), row.get(COL_LASTNAME, ""))
 
         keys: list[tuple[str, str]] = []
         if email:
             keys.append(("email", email))
         if username:
             keys.append(("username", username))
-        if full_name:
-            keys.append(("name", full_name))
+        for name_variant in sorted(name_variants):
+            keys.append(("name", name_variant))
 
         for key_type, key_value in keys:
             compound_key = f"{key_type}:{key_value}"

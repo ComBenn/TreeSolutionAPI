@@ -136,6 +136,7 @@ Duplikate werden aus der Original-Benutzerdatei erzeugt und nach folgenden Merkm
 - gleiche Email
 - gleicher Username
 - gleiche Namenskombination
+- vertauschte Vorname/Nachname-Kombinationen
 
 Technische Accounts werden vor der Duplikatbildung herausgefiltert.
 Sie erscheinen deshalb nicht im Duplikatfenster und koennen auch keine normalen Konten als Duplikat markieren.
