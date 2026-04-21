@@ -5,7 +5,12 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "treesolution_helper" / "files"))
 
-from duplicate_dialogs import _filter_row_records, _sort_row_records
+from duplicate_dialogs import (
+    _extract_department_values,
+    _filter_row_records,
+    _resolve_initial_excluded_ids,
+    _sort_row_records,
+)
 
 
 class DuplicateDialogHelpersTests(unittest.TestCase):
@@ -45,6 +50,46 @@ class DuplicateDialogHelpersTests(unittest.TestCase):
         result = _sort_row_records(self.row_records, "lastname", True)
 
         self.assertEqual([record["iid"] for record in result], ["dup-2", "dup-0", "dup-1"])
+
+    def test_extract_department_values_collects_single_and_numbered_columns(self) -> None:
+        result = _extract_department_values(
+            {
+                "department2": "HR",
+                "department": "Finance",
+                "department1": "duplicates",
+                "Department3": "HR",
+                "username": "alice",
+            }
+        )
+
+        self.assertEqual(result, ["Finance", "duplicates", "HR"])
+
+    def test_resolve_initial_excluded_ids_prefers_reviewed_state_and_defaults_new_duplicates_department(self) -> None:
+        row_records = [
+            {"id": "10", "department_values": ["duplicates"]},
+            {"id": "11", "department_values": ["Sales"]},
+            {"id": "12", "department_values": ["duplicates"]},
+            {"id": "13", "department_values": ["HR"]},
+        ]
+
+        result = _resolve_initial_excluded_ids(
+            row_records,
+            saved_excluded_ids={"11"},
+            reviewed_ids={"11", "12"},
+        )
+
+        self.assertEqual(result, {"10", "11"})
+
+    def test_resolve_initial_excluded_ids_keeps_reviewed_rows_without_saved_exclusion_selected(self) -> None:
+        row_records = [{"id": "21", "department_values": ["duplicates"]}]
+
+        result = _resolve_initial_excluded_ids(
+            row_records,
+            saved_excluded_ids=set(),
+            reviewed_ids={"21"},
+        )
+
+        self.assertEqual(result, set())
 
 
 if __name__ == "__main__":

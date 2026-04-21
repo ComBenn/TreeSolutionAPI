@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import re
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, ttk
 
-from config import COL_EMAIL, COL_FIRSTNAME, COL_ID, COL_LASTNAME, COL_USERNAME
+import pandas as pd
+
+from config import COL_DEPARTMENT, COL_EMAIL, COL_FIRSTNAME, COL_ID, COL_LASTNAME, COL_USERNAME
+
+
+_DEPARTMENT_COLUMN_RE = re.compile(r"^department(\d+)?$", re.IGNORECASE)
+_DUPLICATES_DEPARTMENT = "duplicates"
 
 
 def _normalize_sort_value(value: str) -> tuple[int, object]:
@@ -33,6 +40,55 @@ def _sort_row_records(row_records: list[dict], sort_column: str, descending: boo
         key=lambda record: _normalize_sort_value(record["data"].get(sort_column, "")),
         reverse=descending,
     )
+
+
+def _department_column_sort_key(column: str) -> tuple[int, int, str]:
+    text = str(column).strip()
+    if text.casefold() == COL_DEPARTMENT.casefold():
+        return (0, 0, "")
+    match = _DEPARTMENT_COLUMN_RE.fullmatch(text)
+    if match and match.group(1):
+        return (1, int(match.group(1)), "")
+    return (2, 0, text.casefold())
+
+
+def _extract_department_values(row: dict) -> list[str]:
+    department_columns = sorted(
+        [str(col) for col in row.keys() if _DEPARTMENT_COLUMN_RE.fullmatch(str(col).strip())],
+        key=_department_column_sort_key,
+    )
+    values: list[str] = []
+    seen: set[str] = set()
+    for column in department_columns:
+        value = str(row.get(column, "")).strip()
+        if not value:
+            continue
+        value_cf = value.casefold()
+        if value_cf in seen:
+            continue
+        seen.add(value_cf)
+        values.append(value)
+    return values
+
+
+def _resolve_initial_excluded_ids(
+    row_records: list[dict],
+    saved_excluded_ids: set[str],
+    reviewed_ids: set[str],
+) -> set[str]:
+    initial_excluded_ids: set[str] = set()
+    for record in row_records:
+        row_id = str(record.get("id", "")).strip()
+        if not row_id:
+            continue
+        if row_id in reviewed_ids:
+            if row_id in saved_excluded_ids:
+                initial_excluded_ids.add(row_id)
+            continue
+        department_values = record.get("department_values", [])
+        if any(str(value).strip().casefold() == _DUPLICATES_DEPARTMENT for value in department_values):
+            initial_excluded_ids.add(row_id)
+    return initial_excluded_ids
 
 
 def open_duplicate_review_dialog(ui) -> None:
@@ -69,7 +125,8 @@ def open_duplicate_review_dialog(ui) -> None:
         container,
         text=(
             "Checkbox aktiviert = Account wird ausgeschlossen. "
-            "Pro Duplikat-Gruppe muss mindestens ein Eintrag aktiv bleiben."
+            "Es koennen auch alle Accounts einer Duplikat-Gruppe ausgeschlossen werden. "
+            "Accounts mit Department 'duplicates' sind vorausgewaehlt."
         ),
         anchor="w",
         justify="left",
@@ -81,6 +138,7 @@ def open_duplicate_review_dialog(ui) -> None:
         COL_ID,
         COL_USERNAME,
         COL_EMAIL,
+        "departments",
         COL_FIRSTNAME,
         COL_LASTNAME,
         "flag_duplicate_reason",
@@ -91,10 +149,22 @@ def open_duplicate_review_dialog(ui) -> None:
         COL_ID: "id",
         COL_USERNAME: "username",
         COL_EMAIL: "email",
+        "departments": "Departments",
         COL_FIRSTNAME: "firstname",
         COL_LASTNAME: "lastname",
         "flag_duplicate_reason": "Grund",
     }
+    info_var = tk.StringVar(value=f"{len(duplicate_df)} Zeilen gesamt | {len(group_ids)} Gruppen")
+    tk.Label(container, textvariable=info_var, anchor="w").pack(fill="x", pady=(0, 6))
+
+    table_toolbar = tk.Frame(container)
+    table_toolbar.pack(fill="x", pady=(0, 8))
+    tk.Label(
+        table_toolbar,
+        text="Sortieren: Klick auf Spaltenkopf | Filtern: Rechtsklick auf Spaltenkopf",
+        anchor="w",
+    ).pack(side="left")
+
     table_frame = tk.Frame(container)
     table_frame.pack(fill="both", expand=True)
     tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
@@ -107,12 +177,12 @@ def open_duplicate_review_dialog(ui) -> None:
     table_frame.grid_rowconfigure(0, weight=1)
     table_frame.grid_columnconfigure(0, weight=1)
 
-    sort_state = {"column": "flag_duplicate_group", "descending": False}
+    sort_state = {"column": "flag_duplicate_group", "ascending": True}
 
     def _heading_text(col: str) -> str:
         text = labels.get(col, col)
         if sort_state["column"] == col:
-            return f"{text} {'▼' if sort_state['descending'] else '▲'}"
+            return f"{text} {'▲' if sort_state['ascending'] else '▼'}"
         return text
 
     for col in columns:
@@ -120,14 +190,14 @@ def open_duplicate_review_dialog(ui) -> None:
         width = 130
         if col == "__exclude":
             width = 110
+        elif col == "departments":
+            width = 240
         elif col == "flag_duplicate_reason":
             width = 240
         tree.column(col, width=width, minwidth=90, stretch=True)
 
     tree.tag_configure("odd", background="#f6f8fb")
     tree.tag_configure("even", background="#ffffff")
-    filter_status_var = tk.StringVar(value="Kein Filter aktiv")
-    tk.Label(container, textvariable=filter_status_var, anchor="w", justify="left").pack(fill="x", pady=(8, 0))
 
     row_state: dict[str, dict] = {}
     row_records: list[dict] = []
@@ -135,7 +205,8 @@ def open_duplicate_review_dialog(ui) -> None:
         row_id = str(row.get(COL_ID, "")).strip()
         if not row_id:
             continue
-        excluded = row_id in ui.duplicate_excluded_ids
+        source_row = row.to_dict()
+        department_values = _extract_department_values(source_row)
         iid = f"dup-{i}"
         data = {
             "id": row_id,
@@ -143,6 +214,7 @@ def open_duplicate_review_dialog(ui) -> None:
             COL_ID: row_id,
             COL_USERNAME: row.get(COL_USERNAME, ""),
             COL_EMAIL: row.get(COL_EMAIL, ""),
+            "departments": ", ".join(department_values),
             COL_FIRSTNAME: row.get(COL_FIRSTNAME, ""),
             COL_LASTNAME: row.get(COL_LASTNAME, ""),
             "flag_duplicate_reason": row.get("flag_duplicate_reason", ""),
@@ -151,11 +223,53 @@ def open_duplicate_review_dialog(ui) -> None:
             "iid": iid,
             "id": row_id,
             "data": data,
-            "excluded": excluded,
+            "excluded": False,
             "group": data["flag_duplicate_group"],
+            "department_values": department_values,
+            "source_row": source_row,
         }
         row_records.append(record)
         row_state[iid] = record
+
+    current_duplicate_ids = {
+        str(record["id"]).strip()
+        for record in row_records
+        if str(record["id"]).strip()
+    }
+    saved_excluded_ids = {
+        str(row_id).strip()
+        for row_id in ui.duplicate_excluded_ids
+        if str(row_id).strip() and str(row_id).strip() in current_duplicate_ids
+    }
+    reviewed_ids = {
+        str(row_id).strip()
+        for row_id in getattr(ui, "duplicate_reviewed_ids", set())
+        if str(row_id).strip() and str(row_id).strip() in current_duplicate_ids
+    }
+    initial_excluded_ids = _resolve_initial_excluded_ids(row_records, saved_excluded_ids, reviewed_ids)
+    for record in row_records:
+        record["excluded"] = str(record["id"]).strip() in initial_excluded_ids
+
+    source_rows = []
+    for record in row_records:
+        source_rows.append(
+            {
+                "__iid": record["iid"],
+                "__exclude": "1" if record["excluded"] else "0",
+                "flag_duplicate_group": record["data"]["flag_duplicate_group"],
+                COL_ID: record["data"][COL_ID],
+                COL_USERNAME: record["data"][COL_USERNAME],
+                COL_EMAIL: record["data"][COL_EMAIL],
+                "departments": record["data"]["departments"],
+                COL_FIRSTNAME: record["data"][COL_FIRSTNAME],
+                COL_LASTNAME: record["data"][COL_LASTNAME],
+                "flag_duplicate_reason": record["data"]["flag_duplicate_reason"],
+            }
+        )
+    if source_rows:
+        source_df = pd.DataFrame(source_rows).set_index("__iid", drop=False)
+    else:
+        source_df = pd.DataFrame(columns=["__iid", *columns]).set_index("__iid", drop=False)
 
     def _record_values(record: dict) -> list[str]:
         return [
@@ -164,20 +278,36 @@ def open_duplicate_review_dialog(ui) -> None:
             record["data"][COL_ID],
             record["data"][COL_USERNAME],
             record["data"][COL_EMAIL],
+            record["data"]["departments"],
             record["data"][COL_FIRSTNAME],
             record["data"][COL_LASTNAME],
             record["data"]["flag_duplicate_reason"],
         ]
 
-    active_filter = {"column": "", "text": ""}
+    view_state = {
+        "source_df": source_df,
+        "filters": {},
+        "sort_col": "flag_duplicate_group",
+        "sort_asc": True,
+    }
+
+    def _update_source_df_for_record(record: dict) -> None:
+        iid = str(record["iid"])
+        if iid in view_state["source_df"].index:
+            view_state["source_df"].at[iid, "__exclude"] = "1" if record["excluded"] else "0"
 
     def _refresh_table() -> None:
-        filtered_records = _filter_row_records(row_records, active_filter["column"], active_filter["text"])
-        visible_records = _sort_row_records(
-            filtered_records,
-            sort_state["column"],
-            bool(sort_state["descending"]),
+        display_df = ui._filter_and_sort_df(
+            view_state["source_df"],
+            view_state["filters"],
+            view_state["sort_col"],
+            view_state["sort_asc"],
         )
+        visible_records = [
+            row_state[str(iid)]
+            for iid in display_df["__iid"].fillna("").astype(str).tolist()
+            if str(iid) in row_state
+        ]
         tree.delete(*tree.get_children())
         for i, record in enumerate(visible_records):
             tree.insert(
@@ -189,27 +319,31 @@ def open_duplicate_review_dialog(ui) -> None:
             )
         for col in columns:
             tree.heading(col, text=_heading_text(col))
-
-    def _update_filter_status() -> None:
-        if active_filter["column"] and active_filter["text"]:
-            filter_status_var.set(
-                f"Filter aktiv: {labels.get(active_filter['column'], active_filter['column'])} enthält '{active_filter['text']}'"
-            )
-        else:
-            filter_status_var.set("Kein Filter aktiv")
+        filter_info = ""
+        if view_state["filters"]:
+            parts = [f"{labels.get(col, col)}='{term}'" for col, term in view_state["filters"].items()]
+            filter_info = " | Filter: " + " ; ".join(parts[:3])
+            if len(parts) > 3:
+                filter_info += f" (+{len(parts) - 3})"
+        info_var.set(
+            f"{len(row_records)} Zeilen gesamt | "
+            f"{len(visible_records)} Zeilen angezeigt | "
+            f"{len(group_ids)} Gruppen"
+            f"{filter_info}"
+        )
 
     def _clear_filter() -> None:
-        active_filter["column"] = ""
-        active_filter["text"] = ""
-        _update_filter_status()
+        view_state["filters"].clear()
         _refresh_table()
 
     def _on_sort_column(col: str) -> None:
-        if sort_state["column"] == col:
-            sort_state["descending"] = not bool(sort_state["descending"])
+        if view_state["sort_col"] == col:
+            view_state["sort_asc"] = not bool(view_state["sort_asc"])
         else:
-            sort_state["column"] = col
-            sort_state["descending"] = False
+            view_state["sort_col"] = col
+            view_state["sort_asc"] = True
+        sort_state["column"] = str(view_state["sort_col"])
+        sort_state["ascending"] = bool(view_state["sort_asc"])
         _refresh_table()
 
     for col in columns:
@@ -222,6 +356,7 @@ def open_duplicate_review_dialog(ui) -> None:
         if not current_iid or current_iid not in row_state:
             return
         row_state[current_iid]["excluded"] = not bool(row_state[current_iid]["excluded"])
+        _update_source_df_for_record(row_state[current_iid])
         _refresh_table()
 
     def _toggle_checkbox_click(event) -> None:
@@ -233,47 +368,46 @@ def open_duplicate_review_dialog(ui) -> None:
             _toggle_selected_row()
 
     header_menu = tk.Menu(win, tearoff=0)
+    active_header_col = {"name": None}
 
-    def _open_filter_dialog(column: str) -> None:
-        if column == "__exclude":
+    def _open_header_filter_dialog(column: str) -> None:
+        if not column or column == "__exclude":
             return
-        current_text = active_filter["text"] if active_filter["column"] == column else ""
-        filter_value = simpledialog.askstring(
-            "Filter setzen",
-            f"Filter für Spalte '{labels.get(column, column)}' eingeben:",
-            initialvalue=current_text,
+        ui._open_contains_filter_dialog(
             parent=win,
+            col=column,
+            source_df=view_state["source_df"],
+            filters=view_state["filters"],
+            refresh_callback=_refresh_table,
+            columns=columns,
         )
-        if filter_value is None:
+
+    def _clear_header_filter(column: str) -> None:
+        if not column:
             return
-        filter_value = str(filter_value).strip()
-        if not filter_value:
-            _clear_filter()
-            return
-        active_filter["column"] = column
-        active_filter["text"] = filter_value
-        _update_filter_status()
+        view_state["filters"].pop(column, None)
         _refresh_table()
 
     def _show_header_menu(event) -> None:
-        if tree.identify_region(event.x, event.y) != "heading":
+        column = ui._column_from_tree_event(tree, columns, event)
+        if not column or column == "__exclude":
             return
-        column_ref = tree.identify_column(event.x)
-        if not column_ref or not column_ref.startswith("#"):
-            return
-        column_index = int(column_ref[1:]) - 1
-        if column_index < 0 or column_index >= len(columns):
-            return
-        column = columns[column_index]
-        if column == "__exclude":
-            return
+        active_header_col["name"] = column
         header_menu.delete(0, "end")
         header_menu.add_command(
-            label=f"Filter für {labels.get(column, column)} setzen",
-            command=lambda c=column: _open_filter_dialog(c),
+            label="Filter setzen...",
+            command=lambda: ui._with_errors(
+                lambda: _open_header_filter_dialog(str(active_header_col["name"] or ""))
+            ),
         )
-        header_menu.add_command(label="Filter entfernen", command=_clear_filter)
+        header_menu.add_command(
+            label="Filter dieser Spalte loeschen",
+            command=lambda: ui._with_errors(
+                lambda: _clear_header_filter(str(active_header_col["name"] or ""))
+            ),
+        )
         header_menu.tk_popup(event.x_root, event.y_root)
+        header_menu.grab_release()
 
     tree.bind("<Button-1>", _toggle_checkbox_click, add="+")
     tree.bind("<Button-3>", _show_header_menu, add="+")
@@ -281,23 +415,16 @@ def open_duplicate_review_dialog(ui) -> None:
     tree.bind("<space>", _toggle_selected_row)
 
     _refresh_table()
-    _update_filter_status()
+
+    tk.Button(
+        table_toolbar,
+        text="Alle Filter loeschen",
+        command=lambda: ui._with_errors(_clear_filter),
+        width=18,
+    ).pack(side="right")
 
     footer = tk.Frame(container)
     footer.pack(fill="x", pady=(8, 0))
-
-    def _validate_selection() -> None:
-        active_per_group: dict[str, int] = {}
-        for state in row_state.values():
-            group = str(state["group"]).strip()
-            if group and not bool(state["excluded"]):
-                active_per_group[group] = active_per_group.get(group, 0) + 1
-        invalid_groups = [group for group in group_ids if active_per_group.get(group, 0) == 0]
-        if invalid_groups:
-            raise RuntimeError(
-                "Mindestens ein Account pro Gruppe muss aktiv bleiben. "
-                f"Ungültige Gruppen: {', '.join(invalid_groups[:10])}"
-            )
 
     def _exclude_all_but_first() -> None:
         for group in group_ids:
@@ -312,6 +439,7 @@ def open_duplicate_review_dialog(ui) -> None:
             )
             for pos, record in enumerate(group_records):
                 record["excluded"] = pos > 0
+                _update_source_df_for_record(record)
         _refresh_table()
 
     def _open_selection_in_export_window(export_excluded: bool) -> None:
@@ -338,12 +466,23 @@ def open_duplicate_review_dialog(ui) -> None:
         )
 
     def _save_selection() -> None:
-        _validate_selection()
-        ui.duplicate_excluded_ids = {
+        selected_excluded_ids = {
             state["id"]
             for state in row_state.values()
             if bool(state["excluded"]) and str(state["id"]).strip()
         }
+        ui.duplicate_excluded_ids = {
+            row_id
+            for row_id in ui.duplicate_excluded_ids
+            if row_id not in current_duplicate_ids
+        }
+        ui.duplicate_excluded_ids.update(selected_excluded_ids)
+        ui.duplicate_reviewed_ids = {
+            row_id
+            for row_id in getattr(ui, "duplicate_reviewed_ids", set())
+            if row_id not in current_duplicate_ids
+        }
+        ui.duplicate_reviewed_ids.update(current_duplicate_ids)
         ui._ensure_duplicate_template_present(marked_df=marked_df)
         ui._save_ui_state()
         ui._refresh_employee_templates_view()

@@ -59,6 +59,7 @@ class TreeSolutionHelperUI:
         self.technical_template_name = "Technische Accounts (Auto)"
         self.duplicate_template_name = "Duplikate ausgeschlossen (Auto)"
         self.duplicate_excluded_ids: set[str] = set()
+        self.duplicate_reviewed_ids: set[str] = set()
         self._ui_state_load_warning_active = False
         self._ui_state_save_warning_active = False
 
@@ -295,6 +296,7 @@ class TreeSolutionHelperUI:
         employee_template_name = str(payload.get("employee_template_name", "")).strip()
         templates_raw = payload.get("employee_list_templates", [])
         duplicate_excluded_ids_raw = payload.get("duplicate_excluded_ids", [])
+        duplicate_reviewed_ids_raw = payload.get("duplicate_reviewed_ids", [])
 
         if users_file:
             self.users_file_var.set(users_file)
@@ -323,6 +325,11 @@ class TreeSolutionHelperUI:
             for x in duplicate_excluded_ids_raw
             if str(x).strip()
         }
+        self.duplicate_reviewed_ids = {
+            str(x).strip()
+            for x in duplicate_reviewed_ids_raw
+            if str(x).strip()
+        }
         self.employee_list_templates = self._sanitize_employee_templates(templates_raw)
         self._ensure_technical_template_present()
         self._ensure_duplicate_template_present()
@@ -342,6 +349,7 @@ class TreeSolutionHelperUI:
             "employee_list_sheet": self.employee_list_sheet_var.get().strip(),
             "employee_template_name": self.employee_template_name_var.get().strip(),
             "duplicate_excluded_ids": sorted(self.duplicate_excluded_ids),
+            "duplicate_reviewed_ids": sorted(self.duplicate_reviewed_ids),
             "employee_list_templates": self.employee_list_templates,
         }
         try:
