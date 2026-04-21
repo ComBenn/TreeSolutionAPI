@@ -39,6 +39,15 @@ class _UnionFind:
             self.parent[root_b] = root_a
 
 
+def _is_true_like(value) -> bool:
+    if pd.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().casefold()
+    return text in ("1", "true", "yes", "ja", "x")
+
+
 def mark_duplicate_accounts(df_users: pd.DataFrame) -> pd.DataFrame:
     out = df_users.copy()
     row_count = len(out)
@@ -51,8 +60,13 @@ def mark_duplicate_accounts(df_users: pd.DataFrame) -> pd.DataFrame:
     uf = _UnionFind(row_count)
     key_to_indices: dict[str, list[int]] = {}
     row_match_reasons: list[set[str]] = [set() for _ in range(row_count)]
+    technical_flags = [False] * row_count
+    if "flag_technical_account" in out.columns:
+        technical_flags = [_is_true_like(value) for value in out["flag_technical_account"].tolist()]
 
     for pos, (_, row) in enumerate(out.iterrows()):
+        if technical_flags[pos]:
+            continue
         email = norm_text(row.get(COL_EMAIL, ""))
         username = norm_text(row.get(COL_USERNAME, ""))
         lastname = _normalize_name_part(row.get(COL_LASTNAME, ""))
@@ -81,6 +95,8 @@ def mark_duplicate_accounts(df_users: pd.DataFrame) -> pd.DataFrame:
 
     groups: dict[int, list[int]] = {}
     for pos in range(row_count):
+        if technical_flags[pos]:
+            continue
         root = uf.find(pos)
         groups.setdefault(root, []).append(pos)
 

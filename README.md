@@ -21,7 +21,7 @@ Aktuelle Versionsdatei: [VERSION.txt](/C:/workarea/workspace/TreeSolutionAPI/VER
 - Benutzerdatei aus Excel oder CSV laden
 - technische Accounts ueber Keyword-Datei automatisch markieren
 - Duplikate ueber Email, Username und Namenskombinationen erkennen
-- Duplikate manuell in einem eigenen Prueffenster ausschliessen oder beibehalten
+- Duplikate manuell in einem eigenen Prueffenster mit Department-Anzeige, Vorbelegung und Mehrfachfilter pruefen
 - Mitarbeiterlisten als wiederverwendbare Vorlagen speichern
 - Vorlagen auf `einschliessen` oder `ausschliessen` setzen
 - aktuelle Auswahl in einer interaktiven Tabellenansicht pruefen
@@ -137,19 +137,26 @@ Duplikate werden aus der Original-Benutzerdatei erzeugt und nach folgenden Merkm
 - gleicher Username
 - gleiche Namenskombination
 
+Technische Accounts werden vor der Duplikatbildung herausgefiltert.
+Sie erscheinen deshalb nicht im Duplikatfenster und koennen auch keine normalen Konten als Duplikat markieren.
+
 Das Duplikatfenster zeigt nur als Duplikat markierte Datensaetze.
 Dort sind aktuell moeglich:
 
 - Sortieren per Linksklick auf den Spaltenkopf
 - Filtern per Rechtsklick auf den Spaltenkopf
+- mehrere gleichzeitige Spaltenfilter
+- `Alle Filter loeschen`
+- Anzeige bestehender Department-Zuordnungen aus `department`, `department1`, `department2`, ...
 - Ausschluss einzelner Zeilen per Checkbox
-- `Alle außer erster ausschließen`
+- automatische Vorbelegung von Accounts mit Department `duplicates`
+- komplette Duplikat-Gruppen koennen vollstaendig ausgeschlossen werden
+- `Alle ausser erster ausschliessen`
 - Export der eingeschlossenen Duplikate
 - Export der ausgeschlossenen Duplikate
 - Speichern der Auswahl
 
-Wichtige Regel:
-Pro Duplikat-Gruppe muss mindestens ein Datensatz aktiv bleiben.
+Die fruehere Regel, dass pro Duplikat-Gruppe immer mindestens ein Datensatz aktiv bleiben muss, gilt nicht mehr.
 
 Die gespeicherten Ausschluesse landen in der internen Auto-Vorlage:
 
@@ -158,7 +165,8 @@ Die gespeicherten Ausschluesse landen in der internen Auto-Vorlage:
 - `readonly`
 - Quelle: `<auto:duplicate_review>`
 
-Zusatzlich werden die ausgeschlossenen IDs in `ui_state.json` gespeichert.
+Zusatzlich werden die ausgeschlossenen IDs und bereits geprueften Duplikat-IDs in `ui_state.json` gespeichert.
+Dadurch bleiben explizite Entscheidungen erhalten, auch wenn fuer eine Gruppe bewusst nichts ausgeschlossen wurde.
 
 ### 4. Mitarbeiterlisten als Vorlagen
 
@@ -204,6 +212,8 @@ Die normale Tabellenansicht fuer die aktuelle Auswahl unterstuetzt:
 - `Alle Filter löschen`
 - Entfernen selektierter Zeilen aus der aktuellen Auswahl
 - direkten Export der aktuellen Auswahl im Fenster
+
+Das Duplikat-Prueffenster verwendet dieselbe Header-Filterlogik mit mehreren parallelen Spaltenfiltern.
 
 Wichtig:
 Die Header-Filter in den Tabellenfenstern filtern die Anzeige.
@@ -292,7 +302,7 @@ Persistiert werden unter anderem:
   Matching gegen Mitarbeiterlisten.
 
 - [duplicate_dialogs.py](/C:/workarea/workspace/TreeSolutionAPI/src/treesolution_helper/files/duplicate_dialogs.py)
-  Duplikat-Prueffenster mit Sortierung und Header-Filter.
+  Duplikat-Prueffenster mit Department-Anzeige, Vorbelegung und Mehrfachfilter.
 
 - [export_dialogs.py](/C:/workarea/workspace/TreeSolutionAPI/src/treesolution_helper/files/export_dialogs.py)
   Tabellenansicht der aktuellen Auswahl und Batch-Export-Fenster.

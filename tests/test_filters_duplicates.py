@@ -69,6 +69,74 @@ class MarkDuplicateAccountsTests(unittest.TestCase):
         self.assertEqual(result.loc[4, "flag_duplicate_group"], "")
         self.assertTrue(result.loc[4, "flag_duplicate_keep_candidate"])
 
+    def test_mark_duplicate_accounts_ignores_rows_marked_as_technical_accounts(self) -> None:
+        df = pd.DataFrame(
+            [
+                {
+                    "id": "1",
+                    "username": "alice",
+                    "email": "alice@example.com",
+                    "firstname": "Alice",
+                    "lastname": "User",
+                    "flag_technical_account": False,
+                },
+                {
+                    "id": "2",
+                    "username": "alice-admin",
+                    "email": "alice@example.com",
+                    "firstname": "Alice",
+                    "lastname": "Admin",
+                    "flag_technical_account": True,
+                },
+                {
+                    "id": "3",
+                    "username": "alice",
+                    "email": "alice@example.com",
+                    "firstname": "Alice",
+                    "lastname": "User",
+                    "flag_technical_account": False,
+                },
+            ]
+        )
+
+        result = mark_duplicate_accounts(df)
+
+        self.assertTrue(result.loc[0, "flag_duplicate"])
+        self.assertTrue(result.loc[2, "flag_duplicate"])
+        self.assertEqual(result.loc[0, "flag_duplicate_group"], result.loc[2, "flag_duplicate_group"])
+        self.assertFalse(result.loc[1, "flag_duplicate"])
+        self.assertEqual(result.loc[1, "flag_duplicate_group"], "")
+        self.assertEqual(result.loc[1, "flag_duplicate_reason"], "")
+
+    def test_mark_duplicate_accounts_does_not_create_duplicate_from_only_technical_match(self) -> None:
+        df = pd.DataFrame(
+            [
+                {
+                    "id": "1",
+                    "username": "alice",
+                    "email": "alice@example.com",
+                    "firstname": "Alice",
+                    "lastname": "User",
+                    "flag_technical_account": False,
+                },
+                {
+                    "id": "2",
+                    "username": "alice-admin",
+                    "email": "alice@example.com",
+                    "firstname": "Alice",
+                    "lastname": "Admin",
+                    "flag_technical_account": True,
+                },
+            ]
+        )
+
+        result = mark_duplicate_accounts(df)
+
+        self.assertFalse(result.loc[0, "flag_duplicate"])
+        self.assertEqual(result.loc[0, "flag_duplicate_group"], "")
+        self.assertFalse(result.loc[1, "flag_duplicate"])
+        self.assertEqual(result.loc[1, "flag_duplicate_group"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

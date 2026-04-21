@@ -916,9 +916,8 @@ class TreeSolutionHelperUI:
         return marked_df, keywords
 
     def _get_marked_duplicate_df(self) -> pd.DataFrame:
-        if self.state.original_df is None:
-            raise RuntimeError("Zuerst Benutzerdatei laden.")
-        return mark_duplicate_accounts(self.state.original_df)
+        technical_df, _keywords = self._get_marked_technical_df()
+        return mark_duplicate_accounts(technical_df)
 
     def _refresh_auto_flags(self) -> tuple[int, int]:
         technical_df, keywords = self._get_marked_technical_df()
