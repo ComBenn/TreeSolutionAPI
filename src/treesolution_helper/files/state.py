@@ -17,18 +17,21 @@ from io_utils import load_table
 
 
 def _bundle_base_dir() -> Path:
+    """Liefert das Verzeichnis der gebuendelten Anwendungsdateien."""
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)
     return Path(__file__).resolve().parent
 
 
 def _app_runtime_dir() -> Path:
+    """Bestimmt das beschreibbare Laufzeitverzeichnis fuer Statusdateien."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
 
 class AppState:
+    """Haelt Benutzerpfade, geladene DataFrames und persistente Runtime-Dateien."""
     def __init__(self) -> None:
         self.bundle_dir = _bundle_base_dir()
         self.runtime_dir = _app_runtime_dir()
@@ -52,15 +55,18 @@ class AppState:
         self._load_batch_export_tracker()
 
     def _add_runtime_warning(self, message: str) -> None:
+        """Puffert nicht-fatale Laufzeitwarnungen fuer die spaetere UI-Ausgabe."""
         if message:
             self.runtime_warnings.append(message)
 
     def consume_runtime_warnings(self) -> list[str]:
+        """Liefert gepufferte Warnungen und leert den internen Speicher."""
         warnings = list(self.runtime_warnings)
         self.runtime_warnings.clear()
         return warnings
 
     def _seed_runtime_file(self, filename: str, default_text: str | None = None) -> None:
+        """Erzeugt oder kopiert benoetigte Runtime-Dateien beim Programmstart."""
         dst = self.runtime_dir / filename
         if dst.exists():
             return
@@ -76,15 +82,18 @@ class AppState:
             )
 
     def load_users(self) -> None:
+        """Laedt die Benutzerquelle und setzt Original- sowie Arbeitskopie."""
         self.original_df = load_table(self.users_file, self.users_sheet)
         self.current_df = self.original_df.copy()
 
     def reset(self) -> None:
+        """Setzt die aktuelle Auswahl auf die zuletzt geladene Originaldatei zurueck."""
         if self.original_df is None:
             raise RuntimeError("Noch keine Benutzerdatei geladen.")
         self.current_df = self.original_df.copy()
 
     def _load_batch_export_tracker(self) -> None:
+        """Laedt die persistente Batch-Merkliste oder markiert sie als defekt."""
         p = self.batch_export_tracker_file
         self.batch_export_tracker_error = None
         if not p.exists():
@@ -107,6 +116,7 @@ class AppState:
             self._add_runtime_warning(self.batch_export_tracker_error)
 
     def _backup_invalid_tracker_file(self, path: Path) -> Path | None:
+        """Sichert eine beschaedigte Tracker-Datei unter einem freien Namen."""
         suffix = path.suffix or ""
         for counter in range(100):
             if counter == 0:
@@ -129,12 +139,14 @@ class AppState:
         return None
 
     def save_batch_export_tracker(self) -> None:
+        """Schreibt die aktuelle Batch-Merkliste als JSON auf die Platte."""
         p = self.batch_export_tracker_file
         payload = {"exported_ids": sorted(self.batch_exported_ids)}
         p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         self.batch_export_tracker_error = None
 
     def reset_batch_export_tracker(self) -> None:
+        """Leert die Batch-Merkliste und speichert den Reset sofort persistent."""
         self.batch_exported_ids.clear()
         self.batch_export_tracker_error = None
         self.save_batch_export_tracker()

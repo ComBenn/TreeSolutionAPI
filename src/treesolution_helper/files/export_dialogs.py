@@ -14,6 +14,7 @@ def open_current_table_dialog(
     delete_callback=None,
     delete_confirm_text: str | None = None,
 ) -> None:
+    """Oeffnet die allgemeine Tabellenansicht mit Filter-, Loesch- und Exportfunktionen."""
     df = df_override if df_override is not None else ui.state.current_df
     if df is None:
         messagebox.showinfo("Keine Daten", "Noch keine Benutzerdatei geladen.")
@@ -249,6 +250,7 @@ def open_current_table_dialog(
 
 
 def open_batch_export_window(ui) -> None:
+    """Zeigt die noch nicht exportierten Batch-Kandidaten mit Exportsteuerung an."""
     df = ui.state.current_df
     if df is None:
         messagebox.showinfo("Keine Daten", "Noch keine Benutzerdatei geladen.")

@@ -4,6 +4,7 @@ import pandas as pd
 
 
 def find_template_index_by_name(templates: list[dict], name: str) -> int | None:
+    """Findet eine Vorlage per Name case-insensitive in der UI-Liste."""
     name_cf = str(name).strip().casefold()
     for i, template in enumerate(templates):
         if str(template.get("name", "")).strip().casefold() == name_cf:
@@ -15,6 +16,7 @@ def build_internal_technical_template_data(
     marked_df: pd.DataFrame,
     col_id: str,
 ) -> tuple[list[str], list[dict], int]:
+    """Leitet aus technisch markierten Zeilen die interne Auto-Vorlage ab."""
     if col_id not in marked_df.columns:
         return [], [], 0
     if "flag_technical_account" not in marked_df.columns:
@@ -42,6 +44,7 @@ def build_internal_duplicate_template_data(
     duplicate_excluded_ids: set[str],
     col_id: str,
 ) -> tuple[list[str], list[dict], int]:
+    """Baut die interne Ausschluss-Vorlage aus den gemerkten Duplikat-IDs."""
     if col_id not in marked_df.columns:
         return [], [], 0
     matched_df = marked_df[
@@ -70,6 +73,7 @@ def upsert_auto_template(
     rows: list[dict],
     insert_at: int,
 ) -> tuple[bool, dict]:
+    """Legt eine Auto-Vorlage an oder aktualisiert sie an ihrer festen Position."""
     payload = {
         "name": template_name,
         "file": file_marker,

@@ -5,6 +5,7 @@ from io_utils import norm_text
 
 
 def _normalize_name_part(value) -> str:
+    """Bereitet Namensbestandteile fuer robuste Dublettenvergleiche auf."""
     text = norm_text(value)
     if not text:
         return ""
@@ -23,6 +24,7 @@ def _normalize_name_part(value) -> str:
 
 
 def _name_variants(firstname, lastname) -> set[str]:
+    """Erzeugt Vorname/Nachname-Varianten fuer vertauschte Namenspaare."""
     first = _normalize_name_part(firstname)
     last = _normalize_name_part(lastname)
     variants = set()
@@ -33,6 +35,7 @@ def _name_variants(firstname, lastname) -> set[str]:
 
 
 class _UnionFind:
+    """Verwaltet transitive Dublettengruppen ueber gemeinsame Vergleichsschluessel."""
     def __init__(self, size: int) -> None:
         self.parent = list(range(size))
 
@@ -50,6 +53,7 @@ class _UnionFind:
 
 
 def _is_true_like(value) -> bool:
+    """Interpretierte Bool-Werte aus DataFrames konsistent als Wahr/Falsch."""
     if pd.isna(value):
         return False
     if isinstance(value, bool):
@@ -59,6 +63,7 @@ def _is_true_like(value) -> bool:
 
 
 def mark_duplicate_accounts(df_users: pd.DataFrame) -> pd.DataFrame:
+    """Markiert Dubletten ueber Email, Username und Namenskombinationen."""
     out = df_users.copy()
     row_count = len(out)
     if row_count == 0:

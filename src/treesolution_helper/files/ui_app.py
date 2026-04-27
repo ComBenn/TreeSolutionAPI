@@ -35,6 +35,7 @@ from template_service import (
 
 
 class TreeSolutionHelperUI:
+    """Tkinter-Hauptfenster fuer Import, Vorlagenverwaltung, Review und Export."""
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("TreeSolution Helper")
@@ -1004,6 +1005,7 @@ class TreeSolutionHelperUI:
         load_message: str,
         template_summary_label: str | None = None,
     ) -> None:
+        """Laedt Benutzer neu und wendet optional danach alle Vorlagen auf die Originaldaten an."""
         self._sync_state_paths()
         self.state.load_users()
         self._log(f"{load_message}: {len(self.state.current_df)} aus {self.state.users_file}")
@@ -1103,6 +1105,7 @@ class TreeSolutionHelperUI:
         self,
         summary_label: str,
     ) -> tuple[pd.DataFrame, int, int, int]:
+        """Wendet die komplette Vorlagenliste auf die geladene Benutzerbasis an."""
         df_base = self._ensure_original_users_loaded()
         all_indices = list(range(len(self.employee_list_templates)))
         if not all_indices:
@@ -1306,6 +1309,7 @@ class TreeSolutionHelperUI:
         self._with_errors(_run)
 
     def show_technical_accounts_table_export(self) -> None:
+        """Zeigt die aktuell erkannten technischen Accounts im Standard-Exportfenster."""
         def _run() -> None:
             self._ensure_original_users_loaded()
             marked_df, keywords = self._get_marked_technical_df()
@@ -1450,6 +1454,7 @@ class TreeSolutionHelperUI:
 
 
 def run_ui() -> None:
+    """Startet die grafische Anwendung."""
     root = tk.Tk()
     TreeSolutionHelperUI(root)
     root.mainloop()

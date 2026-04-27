@@ -11,6 +11,7 @@ from io_utils import load_table
 
 
 def sanitize_employee_templates(templates_raw) -> list[dict]:
+    """Normalisiert geladene Vorlagen aus `ui_state.json` in das Laufzeitformat."""
     out: list[dict] = []
     if not isinstance(templates_raw, list):
         return out
@@ -55,6 +56,7 @@ def sanitize_employee_templates(templates_raw) -> list[dict]:
 
 
 def normalize_employee_list_sheet(list_file: str, list_sheet: str | None) -> str | None:
+    """Verwendet Sheet-Namen nur fuer Excel-Dateien, nie fuer CSV."""
     sheet = (list_sheet or "").strip() or None
     if Path(list_file).suffix.lower() not in (".xlsx", ".xlsm", ".xls"):
         return None
@@ -62,6 +64,7 @@ def normalize_employee_list_sheet(list_file: str, list_sheet: str | None) -> str
 
 
 def build_internal_template_data(df_base: pd.DataFrame, file_path: str, sheet: str | None) -> tuple[list[str], list[dict], int]:
+    """Speichert Vorlagentreffer als interne ID- und Zeilenliste fuer spaetere Nutzung."""
     if COL_ID not in df_base.columns:
         raise RuntimeError(f"Spalte '{COL_ID}' fehlt in der Benutzerdatei.")
     df_list = load_table(file_path, sheet or None)
@@ -90,6 +93,7 @@ def apply_employee_templates(
     rebuild_callback: Callable[[dict], tuple[list[str], list[dict], int]],
     log_callback: Callable[[str], None] | None = None,
 ) -> tuple[pd.DataFrame, int, int]:
+    """Wendet Include-/Exclude-Vorlagen gesammelt auf die Basisdaten an."""
     if not template_indices:
         raise RuntimeError("Keine Vorlagen ausgewählt.")
     if COL_ID not in df_base.columns:

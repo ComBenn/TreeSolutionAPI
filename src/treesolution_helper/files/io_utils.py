@@ -6,16 +6,19 @@ import re
 
 
 def norm_text(v) -> str:
+    """Normalisiert Text fuer case-insensitive Vergleiche im Projekt."""
     if pd.isna(v):
         return ""
     return str(v).strip().casefold()
 
 
 def is_numeric_string(v: str) -> bool:
+    """Prueft, ob ein Wert ausschliesslich aus Ziffern besteht."""
     return bool(re.fullmatch(r"\d+", v)) if v else False
 
 
 def load_table(path: str, sheet_name: str | None = None) -> pd.DataFrame:
+    """Laedt CSV- oder Excel-Dateien tolerant und liefert immer Strings zurueck."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Datei nicht gefunden: {path}")
@@ -35,12 +38,14 @@ def load_table(path: str, sheet_name: str | None = None) -> pd.DataFrame:
 
 
 def require_columns(df: pd.DataFrame, cols: list[str], context: str):
+    """Bricht frueh mit einer klaren Meldung bei fehlenden Pflichtspalten ab."""
     missing = [c for c in cols if c not in df.columns]
     if missing:
         raise ValueError(f"Fehlende Spalten in {context}: {missing}")
 
 
 def load_keywords_txt(path: str) -> set[str]:
+    """Laedt die Keyword-Datei zeilenweise und normalisiert auf lowercase."""
     p = Path(path)
     if not p.exists():
         p.write_text("", encoding="utf-8")
@@ -56,6 +61,7 @@ def load_keywords_txt(path: str) -> set[str]:
 
 
 def append_keywords_txt(path: str, new_keywords: list[str]) -> int:
+    """Ergaenzt neue Keywords ohne bestehende Eintraege doppelt zu schreiben."""
     p = Path(path)
     existing = load_keywords_txt(path)
     cleaned_to_add = []
@@ -74,7 +80,10 @@ def append_keywords_txt(path: str, new_keywords: list[str]) -> int:
             f.write(prefix + "\n".join(cleaned_to_add))
 
     return len(cleaned_to_add)
+
+
 def _read_text_with_fallbacks(path: Path) -> str:
+    """Liest Textdateien mit den im Projekt ueblichen Fallback-Encodings."""
     for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
         try:
             return path.read_text(encoding=enc)

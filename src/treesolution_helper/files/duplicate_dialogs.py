@@ -14,6 +14,7 @@ _DUPLICATES_DEPARTMENT = "duplicates"
 
 
 def _normalize_sort_value(value: str) -> tuple[int, object]:
+    """Erzeugt einen stabilen Sortierschluessel fuer Text- und Zahlenwerte."""
     text = str(value).strip()
     if text == "":
         return (2, "")
@@ -24,6 +25,7 @@ def _normalize_sort_value(value: str) -> tuple[int, object]:
 
 
 def _filter_row_records(row_records: list[dict], filter_column: str, filter_text: str) -> list[dict]:
+    """Filtert vorbereitete Tabellenzeilen per Contains-Suche in einer Spalte."""
     needle = str(filter_text).strip().casefold()
     if not needle:
         return list(row_records)
@@ -35,6 +37,7 @@ def _filter_row_records(row_records: list[dict], filter_column: str, filter_text
 
 
 def _sort_row_records(row_records: list[dict], sort_column: str, descending: bool) -> list[dict]:
+    """Sortiert vorbereitete Zeilen anhand einer sichtbaren Dialogspalte."""
     return sorted(
         row_records,
         key=lambda record: _normalize_sort_value(record["data"].get(sort_column, "")),
@@ -43,6 +46,7 @@ def _sort_row_records(row_records: list[dict], sort_column: str, descending: boo
 
 
 def _department_column_sort_key(column: str) -> tuple[int, int, str]:
+    """Sortiert `department`, `department1`, `department2`, ... in fachlicher Reihenfolge."""
     text = str(column).strip()
     if text.casefold() == COL_DEPARTMENT.casefold():
         return (0, 0, "")
@@ -53,6 +57,7 @@ def _department_column_sort_key(column: str) -> tuple[int, int, str]:
 
 
 def _extract_department_values(row: dict) -> list[str]:
+    """Sammelt Department-Werte aus allen Department-Spalten ohne Dubletten."""
     department_columns = sorted(
         [str(col) for col in row.keys() if _DEPARTMENT_COLUMN_RE.fullmatch(str(col).strip())],
         key=_department_column_sort_key,
@@ -76,6 +81,7 @@ def _resolve_initial_excluded_ids(
     saved_excluded_ids: set[str],
     reviewed_ids: set[str],
 ) -> set[str]:
+    """Bestimmt die initial vorausgewaehlten Ausschluesse im Duplikatdialog."""
     initial_excluded_ids: set[str] = set()
     for record in row_records:
         row_id = str(record.get("id", "")).strip()
@@ -92,6 +98,7 @@ def _resolve_initial_excluded_ids(
 
 
 def open_duplicate_review_dialog(ui) -> None:
+    """Oeffnet den Review-Dialog fuer gefundene Duplikatgruppen."""
     marked_df = ui._get_marked_duplicate_df()
     if "flag_duplicate" not in marked_df.columns:
         raise RuntimeError("Duplikate konnten nicht markiert werden.")
