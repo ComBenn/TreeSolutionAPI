@@ -89,6 +89,12 @@ class TreeSolutionHelperUI:
         technical = tk.LabelFrame(self.root, text="Technische Accounts", padx=10, pady=10)
         technical.pack(fill="x", padx=10, pady=(0, 10))
         tk.Button(technical, text="Keyword-Datei öffnen", command=self.show_keywords, width=22).grid(row=0, column=0, padx=4, pady=4, sticky="w")
+        tk.Button(
+            technical,
+            text="Technische Accounts anzeigen und exportieren",
+            command=self.show_technical_accounts_table_export,
+            width=40,
+        ).grid(row=0, column=1, padx=4, pady=4, sticky="w")
 
         duplicates = tk.LabelFrame(self.root, text="Duplikate", padx=10, pady=10)
         duplicates.pack(fill="x", padx=10, pady=(0, 10))
@@ -618,12 +624,10 @@ class TreeSolutionHelperUI:
         if not users_path or not Path(users_path).exists():
             return
         try:
-            self._sync_state_paths()
-            self.state.load_users()
-            self._log(
-                f"Benutzer automatisch beim Start geladen: {len(self.state.current_df)} aus {self.state.users_file}"
+            self._load_users_into_state(
+                load_message="Benutzer automatisch beim Start geladen",
+                template_summary_label="Vorlagen automatisch beim Start angewendet",
             )
-            self._refresh_technical_flags_from_keywords()
             self.preview_current()
         except Exception as e:
             self._log(f"Auto-Load beim Start fehlgeschlagen: {e}")
@@ -995,6 +999,18 @@ class TreeSolutionHelperUI:
             raise RuntimeError("Eine Vorlage kann erst erstellt oder angewendet werden, nachdem eine Benutzerdatei geladen wurde.")
         return self.state.original_df
 
+    def _load_users_into_state(
+        self,
+        load_message: str,
+        template_summary_label: str | None = None,
+    ) -> None:
+        self._sync_state_paths()
+        self.state.load_users()
+        self._log(f"{load_message}: {len(self.state.current_df)} aus {self.state.users_file}")
+        self._refresh_auto_flags()
+        if template_summary_label:
+            self._apply_all_employee_templates_to_original_users(template_summary_label)
+
     def _evaluate_employee_template(
         self,
         template: dict,
@@ -1042,23 +1058,7 @@ class TreeSolutionHelperUI:
         self._reapply_all_employee_templates()
 
     def _reapply_all_employee_templates(self) -> None:
-        df_base = self._ensure_original_users_loaded()
-        all_indices = list(range(len(self.employee_list_templates)))
-        if not all_indices:
-            self.state.current_df = df_base.copy()
-            self.preview_current()
-            return
-        selected_df, include_count, exclude_count = self._apply_employee_templates(
-            df_base,
-            all_indices,
-            label="Alle Vorlagen",
-        )
-        self.state.current_df = selected_df
-        self._log(
-            f"Aktuelle Auswahl nach Modusänderung aktualisiert. "
-            f"Vorlagen: {len(all_indices)} | Einschliessen: {include_count} | Ausschliessen: {exclude_count} | "
-            f"Verbleibend: {len(selected_df)}"
-        )
+        self._apply_all_employee_templates_to_original_users("Aktuelle Auswahl nach Modusänderung aktualisiert")
         self.preview_current()
 
     def toggle_selected_template_mode(self) -> None:
@@ -1098,6 +1098,33 @@ class TreeSolutionHelperUI:
         )
         self._save_ui_state()
         return selected_df, include_count, exclude_count
+
+    def _apply_all_employee_templates_to_original_users(
+        self,
+        summary_label: str,
+    ) -> tuple[pd.DataFrame, int, int, int]:
+        df_base = self._ensure_original_users_loaded()
+        all_indices = list(range(len(self.employee_list_templates)))
+        if not all_indices:
+            selected_df = df_base.copy()
+            self.state.current_df = selected_df
+            self._log(
+                f"{summary_label}: Anzahl Vorlagen: 0 | Einschliessen: 0 | Ausschliessen: 0 | "
+                f"Verbleibend: {len(selected_df)}"
+            )
+            return selected_df, 0, 0, 0
+        selected_df, include_count, exclude_count = self._apply_employee_templates(
+            df_base,
+            all_indices,
+            label="Alle Vorlagen",
+        )
+        self.state.current_df = selected_df
+        self._log(
+            f"{summary_label}: Anzahl Vorlagen: {len(all_indices)} | "
+            f"Einschliessen: {include_count} | Ausschliessen: {exclude_count} | "
+            f"Verbleibend: {len(selected_df)}"
+        )
+        return selected_df, len(all_indices), include_count, exclude_count
 
     def load_selected_employee_template(self) -> None:
         def _run() -> None:
@@ -1225,10 +1252,10 @@ class TreeSolutionHelperUI:
 
     def load_users(self) -> None:
         def _run() -> None:
-            self._sync_state_paths()
-            self.state.load_users()
-            self._log(f"Benutzer geladen: {len(self.state.current_df)} aus {self.state.users_file}")
-            self._refresh_auto_flags()
+            self._load_users_into_state(
+                load_message="Benutzer geladen",
+                template_summary_label="Vorlagen automatisch beim Laden angewendet",
+            )
             self.preview_current()
         self._with_errors(_run)
 
@@ -1278,23 +1305,31 @@ class TreeSolutionHelperUI:
             open_duplicate_review_dialog(self)
         self._with_errors(_run)
 
+    def show_technical_accounts_table_export(self) -> None:
+        def _run() -> None:
+            self._ensure_original_users_loaded()
+            marked_df, keywords = self._get_marked_technical_df()
+            technical_df = marked_df[marked_df["flag_technical_account"] == True].copy()
+            technical_df = technical_df.drop(
+                columns=["flag_technical_account", "flag_technical_reason"],
+                errors="ignore",
+            )
+            self._ensure_technical_template_present(marked_df=marked_df)
+            self._refresh_employee_templates_view()
+            self._save_ui_state()
+            self._log(
+                f"Technische Accounts anzeigen: Keywords: {len(keywords)} | Treffer: {len(technical_df)}"
+            )
+            self.show_current_table(
+                df_override=technical_df,
+                title_override=f"Technische Accounts ({len(technical_df)} Zeilen)",
+                sync_state=False,
+            )
+        self._with_errors(_run)
+
     def mark_employee_list(self) -> None:
         def _run() -> None:
-            df_base = self._ensure_original_users_loaded()
-            all_indices = list(range(len(self.employee_list_templates)))
-            if not all_indices:
-                raise RuntimeError("Keine Vorlagen vorhanden.")
-            selected_df, include_count, exclude_count = self._apply_employee_templates(
-                df_base,
-                all_indices,
-                label="Alle Vorlagen",
-            )
-            self.state.current_df = selected_df
-            self._log(
-                f"Alle Vorlagen angewendet. Anzahl Vorlagen: {len(all_indices)} | "
-                f"Einschliessen: {include_count} | Ausschliessen: {exclude_count} | "
-                f"Verbleibend: {len(selected_df)}"
-            )
+            self._apply_all_employee_templates_to_original_users("Alle Vorlagen angewendet")
             self.preview_current()
         self._with_errors(_run)
 

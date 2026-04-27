@@ -34,6 +34,43 @@ class MarkTechnicalAccountsTests(unittest.TestCase):
         self.assertFalse(result.loc[3, "flag_technical_account"])
         self.assertEqual(result.loc[3, "flag_technical_reason"], "")
 
+    def test_mark_technical_accounts_detects_requested_ecobion_and_secretariat_keywords(self) -> None:
+        df = pd.DataFrame(
+            [
+                {"id": "u1", "firstname": "Dataprotection - Ecobion", "lastname": "Team"},
+                {"id": "u2", "firstname": "Ecobion", "lastname": "Secrétariat"},
+                {"id": "u3", "firstname": "Secretariat", "lastname": "Ecobion"},
+                {"id": "u4", "firstname": "Desk", "lastname": "Sekretariat"},
+                {"id": "u5", "firstname": "Segretariato", "lastname": "Hub"},
+                {"id": "u6", "firstname": "Jane", "lastname": "Doe"},
+            ]
+        )
+
+        result = mark_technical_accounts(
+            df,
+            {"dataprotection", "ecobion", "sekretariat", "secrétariat", "secretariat", "segretariato"},
+        )
+
+        self.assertTrue(result.loc[0, "flag_technical_account"])
+        self.assertIn("token_firstname:dataprotection", result.loc[0, "flag_technical_reason"])
+
+        self.assertTrue(result.loc[1, "flag_technical_account"])
+        self.assertIn("exact_firstname:ecobion", result.loc[1, "flag_technical_reason"])
+        self.assertIn("exact_lastname:secrétariat", result.loc[1, "flag_technical_reason"])
+
+        self.assertTrue(result.loc[2, "flag_technical_account"])
+        self.assertIn("exact_firstname:secretariat", result.loc[2, "flag_technical_reason"])
+        self.assertIn("exact_lastname:ecobion", result.loc[2, "flag_technical_reason"])
+
+        self.assertTrue(result.loc[3, "flag_technical_account"])
+        self.assertIn("exact_lastname:sekretariat", result.loc[3, "flag_technical_reason"])
+
+        self.assertTrue(result.loc[4, "flag_technical_account"])
+        self.assertIn("exact_firstname:segretariato", result.loc[4, "flag_technical_reason"])
+
+        self.assertFalse(result.loc[5, "flag_technical_account"])
+        self.assertEqual(result.loc[5, "flag_technical_reason"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
