@@ -113,8 +113,9 @@ Die aktuelle Erkennung verwendet unter anderem:
 - exakte Treffer auf `id`
 - exakte Treffer auf `firstname`
 - exakte Treffer auf `lastname`
+- exakte Treffer auf den Localpart von `username` oder `email`
 - exakte Treffer auf kombinierte Namen
-- Token-Treffer innerhalb von `firstname` oder `lastname`
+- Token-Treffer innerhalb von `firstname`, `lastname`, `username` oder `email`
 - Teilstring-Treffer fuer laengere Keywords
 - numerische `firstname` oder `lastname`
 

@@ -3,7 +3,7 @@
 import pandas as pd
 import re
 from io_utils import norm_text, is_numeric_string, require_columns
-from config import COL_FIRSTNAME, COL_ID, COL_LASTNAME
+from config import COL_EMAIL, COL_FIRSTNAME, COL_ID, COL_LASTNAME, COL_USERNAME
 
 
 MIN_SUBSTRING_KEYWORD_LEN = 5
@@ -46,6 +46,36 @@ def _fullname_variants(firstname: str, lastname: str) -> set[str]:
     return variants
 
 
+def _extract_local_part(value) -> str:
+    """Reduziert Mailadressen auf ihren lokalen Teil vor dem @ fuer technische Treffer."""
+    text = norm_text(value)
+    if not text:
+        return ""
+    if "@" in text:
+        return text.split("@", 1)[0].strip()
+    return text
+
+
+def _collect_field_match_reasons(
+    field_name: str,
+    value: str,
+    keywords: set[str],
+    substring_keywords: list[str],
+) -> list[str]:
+    """Ermittelt exakte, Token- und Teilstring-Treffer fuer ein einzelnes Feld."""
+    if not value:
+        return []
+    if value in keywords:
+        return [f"exact_{field_name}:{value}"]
+    token = _contains_keyword_token(value, keywords)
+    if token:
+        return [f"token_{field_name}:{token}"]
+    substring = _contains_keyword_substring(value, substring_keywords)
+    if substring:
+        return [f"substring_{field_name}:{substring}"]
+    return []
+
+
 def mark_technical_accounts(df: pd.DataFrame, keywords: set[str]) -> pd.DataFrame:
     """
     Markiert technische Accounts per:
@@ -71,6 +101,8 @@ def mark_technical_accounts(df: pd.DataFrame, keywords: set[str]) -> pd.DataFram
         uid = norm_text(row.get(COL_ID, ""))
         fn = norm_text(row.get(COL_FIRSTNAME, ""))
         ln = norm_text(row.get(COL_LASTNAME, ""))
+        username_local = _extract_local_part(row.get(COL_USERNAME, ""))
+        email_local = _extract_local_part(row.get(COL_EMAIL, ""))
         fullname_variants = _fullname_variants(fn, ln)
 
         row_reasons = []
@@ -81,29 +113,13 @@ def mark_technical_accounts(df: pd.DataFrame, keywords: set[str]) -> pd.DataFram
             substring_uid = _contains_keyword_substring(uid, substring_keywords)
             if substring_uid:
                 row_reasons.append(f"substring_id:{substring_uid}")
-        if fn in keywords:
-            row_reasons.append(f"exact_firstname:{fn}")
-        if ln in keywords:
-            row_reasons.append(f"exact_lastname:{ln}")
         matched_fullname = next((name for name in fullname_variants if name in keywords), None)
         if matched_fullname:
             row_reasons.append(f"exact_fullname:{matched_fullname}")
-        if fn not in keywords:
-            token_fn = _contains_keyword_token(fn, keywords)
-            if token_fn:
-                row_reasons.append(f"token_firstname:{token_fn}")
-            else:
-                substring_fn = _contains_keyword_substring(fn, substring_keywords)
-                if substring_fn:
-                    row_reasons.append(f"substring_firstname:{substring_fn}")
-        if ln not in keywords:
-            token_ln = _contains_keyword_token(ln, keywords)
-            if token_ln:
-                row_reasons.append(f"token_lastname:{token_ln}")
-            else:
-                substring_ln = _contains_keyword_substring(ln, substring_keywords)
-                if substring_ln:
-                    row_reasons.append(f"substring_lastname:{substring_ln}")
+        row_reasons.extend(_collect_field_match_reasons("firstname", fn, keywords, substring_keywords))
+        row_reasons.extend(_collect_field_match_reasons("lastname", ln, keywords, substring_keywords))
+        row_reasons.extend(_collect_field_match_reasons("username", username_local, keywords, substring_keywords))
+        row_reasons.extend(_collect_field_match_reasons("email", email_local, keywords, substring_keywords))
         if is_numeric_string(fn):
             row_reasons.append(f"numeric_firstname:{fn}")
         if is_numeric_string(ln):
