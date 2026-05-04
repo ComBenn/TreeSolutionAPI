@@ -35,6 +35,26 @@ class TemplateServiceTests(unittest.TestCase):
         self.assertEqual(result[0]["internal_ids"], ["1", "2"])
         self.assertEqual(result[0]["internal_rows"], [{"id": "1", "name": "A"}])
 
+    def test_sanitize_employee_templates_keeps_supported_suspended_kind(self) -> None:
+        raw = [
+            {
+                "name": "Suspendierte Accounts (Auto)",
+                "file": "<auto:suspended_accounts>",
+                "sheet": "",
+                "mode": "exclude",
+                "kind": "suspended",
+                "readonly": True,
+                "internal_ids": ["7"],
+                "internal_rows": [{"id": "7", "suspended": "1"}],
+            }
+        ]
+
+        result = sanitize_employee_templates(raw)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["kind"], "suspended")
+        self.assertEqual(result[0]["internal_ids"], ["7"])
+
     def test_apply_employee_templates_lets_include_templates_override_excludes(self) -> None:
         df_base = pd.DataFrame(
             [

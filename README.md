@@ -1,7 +1,7 @@
 # TreeSolutionHelper
 
 TreeSolutionHelper ist ein Windows-GUI-Tool zur Aufbereitung von Benutzerexporten fuer den Upload in Zielsysteme.
-Die Anwendung laedt Benutzerdaten aus Excel oder CSV, markiert technische Accounts und Duplikate, verarbeitet Mitarbeiterlisten als Vorlagen, zeigt die aktuelle Auswahl in Tabellenfenstern an und erzeugt daraus Upload-CSV-Dateien.
+Die Anwendung laedt Benutzerdaten aus Excel oder CSV, markiert technische und suspendierte Accounts sowie Duplikate, verarbeitet Mitarbeiterlisten als Vorlagen, zeigt die aktuelle Auswahl in Tabellenfenstern an und erzeugt daraus Upload-CSV-Dateien.
 
 Der normale Einsatz ist die Weitergabe der erzeugten `TreeSolutionHelper.exe`.
 Der Python-Quellstand dient dem Build, der Pflege und dem Nachvollziehen der fachlichen Regeln.
@@ -129,6 +129,20 @@ Die GUI verwaltet automatisch die interne Auto-Vorlage:
 
 Diese Vorlage wird aus den aktuellen Markierungen neu aufgebaut.
 
+### 2a. Suspendierte Accounts
+
+Suspendierte Accounts werden direkt aus der Benutzerdatei ueber die Spalte `suspended` erkannt.
+
+- leer: Account ist nicht suspendiert
+- `1`: Account ist suspendiert
+
+Die GUI verwaltet automatisch die interne Auto-Vorlage:
+
+- `Suspendierte Accounts (Auto)`
+- Modus: `ausschliessen`
+- `readonly`
+- Quelle: `<auto:suspended_accounts>`
+
 ### 3. Duplikate pruefen
 
 Duplikate werden aus der Original-Benutzerdatei erzeugt und nach folgenden Merkmalen gruppiert:
@@ -194,7 +208,7 @@ Unterstuetzte typische Spaltenbezeichnungen in Mitarbeiterlisten:
 - `vorname nachname`
 
 Vorlagen werden in der UI verwaltet und in `ui_state.json` persistiert.
-Die Auto-Vorlagen fuer technische Accounts und Duplikate erscheinen ebenfalls in dieser Liste und sind schreibgeschuetzt.
+Die Auto-Vorlagen fuer technische Accounts, suspendierte Accounts und Duplikate erscheinen ebenfalls in dieser Liste und sind schreibgeschuetzt.
 
 ### 5. Tabellenansichten
 

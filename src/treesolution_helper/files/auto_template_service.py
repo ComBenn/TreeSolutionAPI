@@ -12,20 +12,32 @@ def find_template_index_by_name(templates: list[dict], name: str) -> int | None:
     return None
 
 
-def build_internal_technical_template_data(
+def _is_true_like(value) -> bool:
+    """Interpretierte Bool-Werte aus DataFrames konsistent als Wahr/Falsch."""
+    if pd.isna(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().casefold()
+    return text in ("1", "true", "yes", "ja", "x")
+
+
+def _build_internal_flag_template_data(
     marked_df: pd.DataFrame,
     col_id: str,
+    flag_column: str,
+    drop_columns: list[str] | None = None,
 ) -> tuple[list[str], list[dict], int]:
-    """Leitet aus technisch markierten Zeilen die interne Auto-Vorlage ab."""
+    """Leitet aus markierten Zeilen die interne Auto-Vorlage ab."""
     if col_id not in marked_df.columns:
         return [], [], 0
-    if "flag_technical_account" not in marked_df.columns:
+    if flag_column not in marked_df.columns:
         return [], [], 0
-    matched_df = marked_df[marked_df["flag_technical_account"] == True].copy()
+    matched_df = marked_df[marked_df[flag_column].map(_is_true_like)].copy()
     if matched_df.empty:
         return [], [], 0
     matched_df = matched_df.drop(
-        columns=["flag_technical_account", "flag_technical_reason"],
+        columns=drop_columns or [],
         errors="ignore",
     ).fillna("").astype(str)
     ids = sorted(
@@ -37,6 +49,31 @@ def build_internal_technical_template_data(
     )
     rows = matched_df.to_dict(orient="records")
     return ids, rows, len(matched_df)
+
+
+def build_internal_technical_template_data(
+    marked_df: pd.DataFrame,
+    col_id: str,
+) -> tuple[list[str], list[dict], int]:
+    """Leitet aus technisch markierten Zeilen die interne Auto-Vorlage ab."""
+    return _build_internal_flag_template_data(
+        marked_df,
+        col_id,
+        "flag_technical_account",
+        drop_columns=["flag_technical_account", "flag_technical_reason"],
+    )
+
+
+def build_internal_suspended_template_data(
+    marked_df: pd.DataFrame,
+    col_id: str,
+) -> tuple[list[str], list[dict], int]:
+    """Leitet aus suspendierten Zeilen die interne Auto-Vorlage ab."""
+    return _build_internal_flag_template_data(
+        marked_df,
+        col_id,
+        "suspended",
+    )
 
 
 def build_internal_duplicate_template_data(

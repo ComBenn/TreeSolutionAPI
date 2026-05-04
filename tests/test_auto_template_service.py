@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "treesoluti
 
 from auto_template_service import (
     build_internal_duplicate_template_data,
+    build_internal_suspended_template_data,
     build_internal_technical_template_data,
     find_template_index_by_name,
     upsert_auto_template,
@@ -49,6 +50,27 @@ class AutoTemplateServiceTests(unittest.TestCase):
         self.assertEqual(ids, ["2"])
         self.assertEqual(hits, 1)
         self.assertEqual(rows, [{"id": "2", "flag_duplicate": "True", "flag_duplicate_group": "dup-0001"}])
+
+    def test_build_internal_suspended_template_data_filters_true_like_values(self) -> None:
+        marked_df = pd.DataFrame(
+            [
+                {"id": "1", "username": "user1", "suspended": "1"},
+                {"id": "2", "username": "user2", "suspended": ""},
+                {"id": "3", "username": "user3", "suspended": True},
+            ]
+        )
+
+        ids, rows, hits = build_internal_suspended_template_data(marked_df, "id")
+
+        self.assertEqual(ids, ["1", "3"])
+        self.assertEqual(hits, 2)
+        self.assertEqual(
+            rows,
+            [
+                {"id": "1", "username": "user1", "suspended": "1"},
+                {"id": "3", "username": "user3", "suspended": "True"},
+            ],
+        )
 
     def test_upsert_auto_template_inserts_and_updates(self) -> None:
         templates: list[dict] = []

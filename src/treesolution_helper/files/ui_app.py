@@ -10,6 +10,7 @@ import pandas as pd
 
 from config import (
     COL_ID,
+    COL_SUSPENDED,
 )
 from state import AppState
 from io_utils import load_table, load_keywords_txt
@@ -20,6 +21,7 @@ from exporter import export_utf8_csv
 from export_service import build_export_df, format_export_log_message
 from auto_template_service import (
     build_internal_duplicate_template_data,
+    build_internal_suspended_template_data,
     build_internal_technical_template_data,
     find_template_index_by_name,
     upsert_auto_template,
@@ -58,6 +60,7 @@ class TreeSolutionHelperUI:
         self.employee_list_templates: list[dict] = []
         self.employee_templates_tree: ttk.Treeview | None = None
         self.technical_template_name = "Technische Accounts (Auto)"
+        self.suspended_template_name = "Suspendierte Accounts (Auto)"
         self.duplicate_template_name = "Duplikate ausgeschlossen (Auto)"
         self.duplicate_excluded_ids: set[str] = set()
         self.duplicate_reviewed_ids: set[str] = set()
@@ -69,6 +72,7 @@ class TreeSolutionHelperUI:
         self._refresh_status()
         self._load_ui_state()
         self._ensure_technical_template_present()
+        self._ensure_suspended_template_present()
         self._ensure_duplicate_template_present()
         self._refresh_employee_templates_view()
         self.root.after(100, self._auto_load_last_users_file)
@@ -87,15 +91,21 @@ class TreeSolutionHelperUI:
         tk.Button(actions, text="Benutzer laden", command=self.load_users, width=24).grid(row=0, column=0, padx=4, pady=4, sticky="w")
         tk.Button(actions, text="Auswahl zurücksetzen", command=self.reset_users, width=24).grid(row=0, column=1, padx=4, pady=4, sticky="w")
 
-        technical = tk.LabelFrame(self.root, text="Technische Accounts", padx=10, pady=10)
+        technical = tk.LabelFrame(self.root, text="Technische und suspendierte Accounts", padx=10, pady=10)
         technical.pack(fill="x", padx=10, pady=(0, 10))
         tk.Button(technical, text="Keyword-Datei öffnen", command=self.show_keywords, width=22).grid(row=0, column=0, padx=4, pady=4, sticky="w")
         tk.Button(
             technical,
-            text="Technische Accounts anzeigen und exportieren",
+            text="Technische Accounts anzeigen/exportieren",
             command=self.show_technical_accounts_table_export,
             width=40,
         ).grid(row=0, column=1, padx=4, pady=4, sticky="w")
+        tk.Button(
+            technical,
+            text="Suspendierte Accounts anzeigen/exportieren",
+            command=self.show_suspended_accounts_table_export,
+            width=40,
+        ).grid(row=0, column=2, padx=4, pady=4, sticky="w")
 
         duplicates = tk.LabelFrame(self.root, text="Duplikate", padx=10, pady=10)
         duplicates.pack(fill="x", padx=10, pady=(0, 10))
@@ -339,6 +349,7 @@ class TreeSolutionHelperUI:
         }
         self.employee_list_templates = self._sanitize_employee_templates(templates_raw)
         self._ensure_technical_template_present()
+        self._ensure_suspended_template_present()
         self._ensure_duplicate_template_present()
         self._refresh_employee_templates_view()
         self._sync_state_paths()
@@ -417,6 +428,30 @@ class TreeSolutionHelperUI:
         if inserted:
             self._log(f"Auto-Vorlage bereitgestellt: {self.technical_template_name} | Treffer: {hits}")
 
+    def _build_internal_suspended_template_data(
+        self,
+        marked_df: pd.DataFrame | None = None,
+    ) -> tuple[list[str], list[dict], int]:
+        if self.state.original_df is None and marked_df is None:
+            return [], [], 0
+        source_df = self.state.original_df if marked_df is None else marked_df
+        return build_internal_suspended_template_data(source_df, COL_ID)
+
+    def _ensure_suspended_template_present(self, marked_df: pd.DataFrame | None = None) -> None:
+        ids, rows, hits = self._build_internal_suspended_template_data(marked_df=marked_df)
+        insert_at = 1 if self._find_template_index_by_name(self.technical_template_name) is not None else 0
+        inserted, _payload = upsert_auto_template(
+            self.employee_list_templates,
+            self.suspended_template_name,
+            "<auto:suspended_accounts>",
+            "suspended",
+            ids,
+            rows,
+            insert_at=insert_at,
+        )
+        if inserted:
+            self._log(f"Auto-Vorlage bereitgestellt: {self.suspended_template_name} | Treffer: {hits}")
+
     def _build_internal_duplicate_template_data(
         self,
         marked_df: pd.DataFrame | None = None,
@@ -429,7 +464,11 @@ class TreeSolutionHelperUI:
 
     def _ensure_duplicate_template_present(self, marked_df: pd.DataFrame | None = None) -> None:
         ids, rows, hits = self._build_internal_duplicate_template_data(marked_df=marked_df)
-        insert_at = 1 if self._find_template_index_by_name(self.technical_template_name) is not None else 0
+        insert_at = 0
+        if self._find_template_index_by_name(self.technical_template_name) is not None:
+            insert_at += 1
+        if self._find_template_index_by_name(self.suspended_template_name) is not None:
+            insert_at += 1
         inserted, _payload = upsert_auto_template(
             self.employee_list_templates,
             self.duplicate_template_name,
@@ -555,6 +594,8 @@ class TreeSolutionHelperUI:
         df_base, _keywords = self._get_marked_technical_df()
         if "flag_technical_account" in df_base.columns:
             df_base = df_base[df_base["flag_technical_account"] != True].copy()
+        if COL_SUSPENDED in df_base.columns:
+            df_base = df_base[~df_base[COL_SUSPENDED].map(self._is_true_like)].copy()
         return build_internal_template_data(df_base, file_path, sheet)
 
     def open_employee_template_dialog(self) -> None:
@@ -924,18 +965,39 @@ class TreeSolutionHelperUI:
         technical_df, _keywords = self._get_marked_technical_df()
         return mark_duplicate_accounts(technical_df)
 
+    @staticmethod
+    def _is_true_like(value) -> bool:
+        if pd.isna(value):
+            return False
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().casefold()
+        return text in ("1", "true", "yes", "ja", "x")
+
+    def _get_suspended_accounts_df(self, source_df: pd.DataFrame | None = None) -> pd.DataFrame:
+        df = self.state.original_df if source_df is None else source_df
+        if df is None:
+            raise RuntimeError("Zuerst Benutzerdatei laden.")
+        if COL_SUSPENDED not in df.columns:
+            return df.iloc[0:0].copy()
+        suspended_mask = df[COL_SUSPENDED].map(self._is_true_like)
+        return df[suspended_mask].copy()
+
     def _refresh_auto_flags(self) -> tuple[int, int]:
         technical_df, keywords = self._get_marked_technical_df()
         marked_df = mark_duplicate_accounts(technical_df)
         self.state.current_df = marked_df
         technical_hits = int(marked_df["flag_technical_account"].sum()) if "flag_technical_account" in marked_df.columns else 0
+        suspended_hits = len(self._get_suspended_accounts_df(marked_df))
         duplicate_hits = int(marked_df["flag_duplicate"].sum()) if "flag_duplicate" in marked_df.columns else 0
         self._ensure_technical_template_present(marked_df=marked_df)
+        self._ensure_suspended_template_present(marked_df=marked_df)
         self._ensure_duplicate_template_present(marked_df=marked_df)
         self._refresh_employee_templates_view()
         self._log(
             f"Auto-Markierungen aktualisiert. Keywords: {len(keywords)} | "
-            f"Technische Treffer: {technical_hits} | Duplikat-Treffer: {duplicate_hits}"
+            f"Technische Treffer: {technical_hits} | Suspendierte Treffer: {suspended_hits} | "
+            f"Duplikat-Treffer: {duplicate_hits}"
         )
         return technical_hits, duplicate_hits
 
@@ -1085,6 +1147,8 @@ class TreeSolutionHelperUI:
             template_kind = str(template.get("kind", "employee"))
             if template_kind == "technical":
                 return self._build_internal_technical_template_data()
+            if template_kind == "suspended":
+                return self._build_internal_suspended_template_data()
             if template_kind == "duplicate":
                 return self._build_internal_duplicate_template_data()
             file_path = str(template.get("file", "")).strip()
@@ -1170,6 +1234,11 @@ class TreeSolutionHelperUI:
                     template_kind = str(template.get("kind", "employee"))
                     if template_kind == "technical":
                         rebuilt_ids, rebuilt_rows, _hits = self._build_internal_technical_template_data()
+                        ids_in_template = set(rebuilt_ids)
+                        template["internal_ids"] = rebuilt_ids
+                        template["internal_rows"] = rebuilt_rows
+                    elif template_kind == "suspended":
+                        rebuilt_ids, rebuilt_rows, _hits = self._build_internal_suspended_template_data()
                         ids_in_template = set(rebuilt_ids)
                         template["internal_ids"] = rebuilt_ids
                         template["internal_rows"] = rebuilt_rows
@@ -1327,6 +1396,22 @@ class TreeSolutionHelperUI:
             self.show_current_table(
                 df_override=technical_df,
                 title_override=f"Technische Accounts ({len(technical_df)} Zeilen)",
+                sync_state=False,
+            )
+        self._with_errors(_run)
+
+    def show_suspended_accounts_table_export(self) -> None:
+        """Zeigt die aktuell suspendierten Accounts im Standard-Exportfenster."""
+        def _run() -> None:
+            source_df = self._ensure_original_users_loaded()
+            suspended_df = self._get_suspended_accounts_df(source_df)
+            self._ensure_suspended_template_present(marked_df=source_df)
+            self._refresh_employee_templates_view()
+            self._save_ui_state()
+            self._log(f"Suspendierte Accounts anzeigen: Treffer: {len(suspended_df)}")
+            self.show_current_table(
+                df_override=suspended_df,
+                title_override=f"Suspendierte Accounts ({len(suspended_df)} Zeilen)",
                 sync_state=False,
             )
         self._with_errors(_run)

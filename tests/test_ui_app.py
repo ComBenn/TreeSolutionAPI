@@ -90,6 +90,46 @@ class TreeSolutionHelperUITests(unittest.TestCase):
         self.assertEqual(save_calls, [True])
         self.assertEqual(logs, ["Technische Accounts anzeigen: Keywords: 1 | Treffer: 1"])
 
+    def test_show_suspended_accounts_table_export_opens_filtered_export_view(self) -> None:
+        ui = TreeSolutionHelperUI.__new__(TreeSolutionHelperUI)
+        ui._with_errors = lambda fn: fn()
+
+        source_df = pd.DataFrame(
+            [
+                {"id": "1", "username": "locked", "suspended": "1"},
+                {"id": "2", "username": "active", "suspended": ""},
+                {"id": "3", "username": "also-locked", "suspended": True},
+            ]
+        )
+        ui.state = SimpleNamespace(original_df=source_df)
+        ui._ensure_original_users_loaded = lambda: source_df
+        refresh_calls: list[bool] = []
+        save_calls: list[bool] = []
+        ui._ensure_suspended_template_present = lambda marked_df=None: refresh_calls.append(marked_df is source_df)
+        ui._refresh_employee_templates_view = lambda: refresh_calls.append(True)
+        ui._save_ui_state = lambda: save_calls.append(True)
+        logs: list[str] = []
+        ui._log = logs.append
+        opened: dict[str, object] = {}
+        ui.show_current_table = lambda **kwargs: opened.update(kwargs)
+
+        ui.show_suspended_accounts_table_export()
+
+        suspended_df = opened["df_override"]
+        self.assertIsInstance(suspended_df, pd.DataFrame)
+        self.assertEqual(
+            suspended_df.to_dict(orient="records"),
+            [
+                {"id": "1", "username": "locked", "suspended": "1"},
+                {"id": "3", "username": "also-locked", "suspended": True},
+            ],
+        )
+        self.assertEqual(opened["title_override"], "Suspendierte Accounts (2 Zeilen)")
+        self.assertEqual(opened["sync_state"], False)
+        self.assertEqual(refresh_calls, [True, True])
+        self.assertEqual(save_calls, [True])
+        self.assertEqual(logs, ["Suspendierte Accounts anzeigen: Treffer: 2"])
+
 
 if __name__ == "__main__":
     unittest.main()

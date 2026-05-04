@@ -15,6 +15,7 @@ COL_LASTNAME = "lastname"
 COL_INSTITUTION = "institution"
 COL_DEPARTMENT = "department"
 COL_AUTH = "auth"
+COL_SUSPENDED = "suspended"
 
 # Fixwerte für Upload-Export
 EXPORT_INSTITUTION_VALUE = "Sonic Suisse SA"

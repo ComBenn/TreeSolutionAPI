@@ -28,7 +28,7 @@ def sanitize_employee_templates(templates_raw) -> list[dict]:
             continue
         if mode not in ("include", "exclude"):
             mode = "include"
-        if kind not in ("employee", "technical", "duplicate"):
+        if kind not in ("employee", "technical", "suspended", "duplicate"):
             kind = "employee"
         internal_ids_raw = item.get("internal_ids", [])
         internal_rows_raw = item.get("internal_rows", [])
